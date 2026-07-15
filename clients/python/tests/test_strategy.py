@@ -167,7 +167,7 @@ def test_apply_separation_pushes_robots_apart_when_too_close():
     # through compute_commands' role assignment, where the seek target
     # differences between roles would swamp the separation effect and make
     # the assertion pass even with separation deleted).
-    from ssl_client.strategy import _apply_separation
+    from ssl_client.roles import apply_separation as _apply_separation
     from ssl_client.world import RobotObservation
 
     robot = RobotObservation(robot_id=1, x=0.0, y=0.0, orientation=0.0, t_capture=0.0)
@@ -184,7 +184,7 @@ def test_apply_separation_pushes_robots_apart_when_too_close():
 
 
 def test_apply_separation_does_nothing_when_robots_are_far_apart():
-    from ssl_client.strategy import _apply_separation
+    from ssl_client.roles import apply_separation as _apply_separation
     from ssl_client.world import RobotObservation
 
     robot = RobotObservation(robot_id=1, x=0.0, y=0.0, orientation=0.0, t_capture=0.0)
