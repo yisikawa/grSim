@@ -119,7 +119,11 @@ class TeamStrategy:
         self._formation_slots: Dict[int, int] = {}
 
     def compute_commands(self, world: WorldModel, referee_running: bool):
-        own_robots = world.yellow_robots if self._config.is_team_yellow else world.blue_robots
+        # Snapshot: the Vision receiver runs on its own thread and mutates
+        # world.*_robots concurrently with this method's iteration. Inserting a
+        # newly-seen robot id mid-iteration would raise "dictionary changed size
+        # during iteration".
+        own_robots = dict(world.yellow_robots if self._config.is_team_yellow else world.blue_robots)
         if not own_robots or world.ball is None or world.geometry is None:
             return []
 
