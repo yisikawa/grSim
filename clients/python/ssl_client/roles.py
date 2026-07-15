@@ -5,6 +5,8 @@ so it can be unit tested without a running simulator.
 """
 import math
 
+from .evaluation import lane_safety
+
 SEEK_GAIN = 2.0
 MAX_SPEED = 2.0  # m/s, conservative vs. grSim's configured VelAbsoluteMax=5
 SEPARATION_DISTANCE = 0.4  # meters; own robots closer than this get pushed apart
@@ -101,3 +103,40 @@ def formation_target(world, defend_positive_x: bool, slot_index: int, ball_x: fl
     push_forward = FORMATION_PUSH_FORWARD if ball_in_attacking_half else 0.0
     target_x = goal_x + forward_sign * (forward_offset + push_forward)
     return target_x, lateral_offset
+
+
+BALL_MOVING_MIN_SPEED_MPS = 0.1  # below this the ball counts as stationary
+SUPPORT_CANDIDATE_LATERAL_M = (-0.8, 0.0, 0.8)
+SUPPORT_CANDIDATE_FORWARD_M = (0.0, 0.5)
+
+
+def receiver_target(robot_x: float, robot_y: float, ball):
+    """Intercept point for a pass receiver: the closest point to the robot
+    on the ray from the ball along its velocity. Falls back to the ball
+    position itself when the ball is (nearly) stationary."""
+    speed = math.hypot(ball.vx, ball.vy)
+    if speed < BALL_MOVING_MIN_SPEED_MPS:
+        return ball.x, ball.y
+    ux, uy = ball.vx / speed, ball.vy / speed
+    t = (robot_x - ball.x) * ux + (robot_y - ball.y) * uy
+    t = max(0.0, t)
+    return ball.x + t * ux, ball.y + t * uy
+
+
+def support_target(base_xy, forward_sign: float, ball_xy, opponents):
+    """Off-ball repositioning: sample candidate points around the base
+    formation slot and pick the one with the most open pass lane from the
+    ball. Ties go to the candidate closest to the base slot."""
+    opponents = list(opponents)
+    best_key = None
+    best_candidate = base_xy
+    for forward in SUPPORT_CANDIDATE_FORWARD_M:
+        for lateral in SUPPORT_CANDIDATE_LATERAL_M:
+            candidate = (base_xy[0] + forward_sign * forward, base_xy[1] + lateral)
+            safety = lane_safety(ball_xy, candidate, opponents)
+            dist_to_base = math.hypot(candidate[0] - base_xy[0], candidate[1] - base_xy[1])
+            key = (safety, -dist_to_base)  # maximize safety, then prefer near-base
+            if best_key is None or key > best_key:
+                best_key = key
+                best_candidate = candidate
+    return best_candidate
