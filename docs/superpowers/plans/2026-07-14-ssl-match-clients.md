@@ -1,26 +1,26 @@
-# SSL Match Clients (Python) Implementation Plan
+# SSL 対戦クライアント(Python) 実装プラン
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **エージェント作業者向け:** 必須サブスキル: このプランをタスクごとに実行するには superpowers:subagent-driven-development(推奨)または superpowers:executing-plans を使用すること。各ステップはチェックボックス(`- [ ]`)構文で進捗を追跡する。
 
-**Goal:** Build two independent Python clients (`team_blue.py`, `team_yellow.py`) that connect to a running grSim instance and the official `ssl-game-controller`, and produce visibly coherent play (ball-chasing attacker, goalkeeper, simple formation, freeze on HALT/STOP).
+**目標:** 稼働中の grSim インスタンスと公式 `ssl-game-controller` に接続し、見た目にまとまりのあるプレー(ボールを追うアタッカー、ゴールキーパー、簡易フォーメーション、HALT/STOP での停止)を行う、2つの独立した Python クライアント(`team_blue.py`、`team_yellow.py`)を構築する。
 
-**Architecture:** A shared `ssl_client` package (world model, Vision receiver, Referee receiver, command builder/sender, strategy) used by two thin entrypoint scripts that differ only in team color and default defended side. Everything runs as plain Python processes inside WSL2, talking to grSim over the same UDP/multicast sockets the existing Qt sample client uses.
+**アーキテクチャ:** 共有の `ssl_client` パッケージ(ワールドモデル、Vision 受信、Referee 受信、コマンド組み立て/送信、戦略)を、チームカラーとデフォルトの守備サイドだけが異なる2つの薄いエントリポイントスクリプトが利用する。すべては WSL2 内のただの Python プロセスとして動作し、既存の Qt サンプルクライアントと同じ UDP/マルチキャストソケットで grSim と通信する。
 
-**Tech Stack:** Python 3.10 (WSL2 Ubuntu 22.04 system Python), `protobuf` (pip), `pytest`, system `protoc` (apt `protobuf-compiler`, already installed for the C++ build).
+**技術スタック:** Python 3.10(WSL2 Ubuntu 22.04 のシステム Python)、`protobuf`(pip)、`pytest`、システムの `protoc`(apt の `protobuf-compiler`、C++ ビルド用に既にインストール済み)。
 
-## Global Constraints
+## グローバル制約
 
-- Runs inside WSL2 Ubuntu 22.04, from the Windows-mounted path `/mnt/d/LLMprojects/grSim/clients/python` (no copy under the Linux-native filesystem needed — see the approved design doc).
-- System `protoc` is version 3.12.4 (verified via `protoc --version`). Its generated Python code is descriptor-based and is **rejected** by the `protobuf` pip package's default (upb) backend with `TypeError: Descriptors cannot be created directly.` Every entrypoint and every test run MUST set `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python` before any generated `_pb2` module is imported (verified working in this repo's environment). This is set once in `ssl_client/__init__.py`.
-- All positions and geometry inside `ssl_client` (i.e. everywhere except right at the protobuf parse boundary) are in **meters** and **radians**. grSim's wire format uses millimeters for `SSL_DetectionBall`/`SSL_DetectionRobot`/`SSL_GeometryFieldSize` and radians for orientation — convert mm → m (`/1000.0`) exactly once, in `ssl_client/world.py`.
-- Command velocities sent to grSim (`veltangent`, `velnormal`) are in the **robot's own local frame** (tangent = forward, normal = left), NOT the field/global frame — confirmed by reading `Robot::setSpeed` in `src/robot.cpp:453-511`, which consumes `vx`/`vy` directly in the wheel-speed formula with no heading rotation applied. All strategy code reasons in the global field frame; `ssl_client/commands.py` is the only place that rotates into the local frame.
-- Commands are sent to grSim as `grSim_Packet` (this repo's `src/proto/grSim_Packet.proto` / `grSim_Commands.proto`) via UDP unicast to `127.0.0.1:20011`, matching the approved design doc and the existing `clients/qt` sample — NOT the newer per-team `ssl-simulation-protocol` ports (10301/10302).
-- Vision default is multicast `224.5.23.2:10020` (`ssl_vision_wrapper.proto`); Referee default is multicast `224.5.23.1:10003` (`ssl_gc_referee_message.proto`, fetched from `RoboCup-SSL/ssl-game-controller`). Both are overridable via CLI flags.
-- Per the approved design doc, no automated end-to-end/system test exists. TDD applies to the **pure logic** in each module (parsing, world-model updates, packet building, strategy math); socket/threading glue (`run_forever` loops) is verified manually in Task 8, not unit tested.
+- WSL2 Ubuntu 22.04 内、Windows マウントパス `/mnt/d/LLMprojects/grSim/clients/python` から実行する(承認済み設計書のとおり、Linux ネイティブファイルシステム下へのコピーは不要)。
+- システムの `protoc` はバージョン 3.12.4(`protoc --version` で確認済み)。この生成 Python コードは descriptor ベースであり、`protobuf` pip パッケージのデフォルト(upb)バックエンドでは `TypeError: Descriptors cannot be created directly.` により**拒否される**。生成された `_pb2` モジュールを import する前に、すべてのエントリポイントとすべてのテスト実行で `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python` を設定しなければならない(このリポジトリの環境で動作確認済み)。これは `ssl_client/__init__.py` で一度だけ設定する。
+- `ssl_client` 内のすべての位置・ジオメトリ(つまり protobuf のパース境界のすぐ手前を除くすべての箇所)は**メートル**と**ラジアン**で扱う。grSim のワイヤーフォーマットは `SSL_DetectionBall`/`SSL_DetectionRobot`/`SSL_GeometryFieldSize` でミリメートルを、向きにはラジアンを使うため、mm → m の変換(`/1000.0`)は `ssl_client/world.py` の中で一度だけ正確に行う。
+- grSim へ送信するコマンド速度(`veltangent`、`velnormal`)は**ロボット自身のローカル座標系**(tangent = 前方、normal = 左方向)であり、フィールド/グローバル座標系ではない — `src/robot.cpp:453-511` の `Robot::setSpeed` を読んで確認済み。ここでは `vx`/`vy` をホイール速度の計算式にそのまま使っており、向きに応じた回転は一切適用されていない。戦略コードはすべてグローバルなフィールド座標系で考え、`ssl_client/commands.py` だけがローカル座標系へ回転させる唯一の場所とする。
+- コマンドは grSim へ `grSim_Packet`(本リポジトリの `src/proto/grSim_Packet.proto` / `grSim_Commands.proto`)として UDP ユニキャストで `127.0.0.1:20011` へ送信する。これは承認済み設計書および既存の `clients/qt` サンプルと一致するもので、新しいチームごとの `ssl-simulation-protocol` ポート(10301/10302)ではない。
+- Vision のデフォルトはマルチキャスト `224.5.23.2:10020`(`ssl_vision_wrapper.proto`)、Referee のデフォルトはマルチキャスト `224.5.23.1:10003`(`ssl_gc_referee_message.proto`、`RoboCup-SSL/ssl-game-controller` から取得)。いずれも CLI フラグで上書き可能。
+- 承認済み設計書のとおり、自動化されたエンドツーエンド/システムテストは存在しない。TDD は各モジュールの**純粋なロジック**(パース、ワールドモデルの更新、パケット組み立て、戦略の計算)に適用する。ソケット/スレッドの結合部分(`run_forever` ループ)は Task 8 で手動確認し、単体テストの対象にはしない。
 
 ---
 
-### Task 1: Project scaffold, protobuf code generation, and shared networking helper
+### Task 1: プロジェクトの雛形、protobuf コード生成、共有ネットワークヘルパー
 
 **Files:**
 - Create: `clients/python/requirements.txt`
@@ -32,16 +32,16 @@
 - Create: `clients/python/.gitignore`
 
 **Interfaces:**
-- Produces: `ssl_client/pb/` directory (git-ignored, generated) containing importable flat modules `grSim_Commands_pb2`, `grSim_Packet_pb2`, `grSim_Replacement_pb2`, `ssl_vision_geometry_pb2`, `ssl_vision_detection_pb2`, `ssl_vision_wrapper_pb2`, plus `state/ssl_gc_referee_message_pb2` (and its dependencies `state/ssl_gc_game_event_pb2`, `state/ssl_gc_common_pb2`, `geom/ssl_gc_geometry_pb2`), importable as `from state import ssl_gc_referee_message_pb2` once `ssl_client` has been imported.
-- Produces: `ssl_client.net.open_multicast_socket(group: str, port: int) -> socket.socket` — used by Tasks 3 and 4.
+- Produces: `ssl_client/pb/` ディレクトリ(git 管理外、生成物)。import 可能なフラットモジュール `grSim_Commands_pb2`、`grSim_Packet_pb2`、`grSim_Replacement_pb2`、`ssl_vision_geometry_pb2`、`ssl_vision_detection_pb2`、`ssl_vision_wrapper_pb2`、および `state/ssl_gc_referee_message_pb2`(とその依存先 `state/ssl_gc_game_event_pb2`、`state/ssl_gc_common_pb2`、`geom/ssl_gc_geometry_pb2`)を含む。`ssl_client` を import した後は `from state import ssl_gc_referee_message_pb2` として import できる。
+- Produces: `ssl_client.net.open_multicast_socket(group: str, port: int) -> socket.socket` — Task 3 と Task 4 で使用。
 
-- [ ] **Step 1: Create the directory layout and `.gitignore`**
+- [ ] **Step 1: ディレクトリ構成と `.gitignore` を作る**
 
 ```bash
 mkdir -p clients/python/scripts clients/python/ssl_client clients/python/tests
 ```
 
-Create `clients/python/.gitignore`:
+`clients/python/.gitignore` を作成:
 
 ```
 pb/
@@ -51,21 +51,21 @@ __pycache__/
 .pytest_cache/
 ```
 
-- [ ] **Step 2: Write `requirements.txt`**
+- [ ] **Step 2: `requirements.txt` を書く**
 
-Pin `protobuf` to the exact version verified against this environment's
-`protoc` (3.12.4) and the `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python`
-workaround (see Global Constraints) — newer major versions of `protobuf`
-tighten gencode/runtime compatibility checks and are not verified here.
+この環境の `protoc`(3.12.4)と `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python`
+の回避策(グローバル制約を参照)に対して動作確認済みの正確なバージョンに
+`protobuf` を固定する — `protobuf` の新しいメジャーバージョンは
+gencode/ランタイムの互換性チェックが厳格化されており、ここでは未検証。
 
 ```
 protobuf==7.35.1
 pytest>=7.0
 ```
 
-- [ ] **Step 3: Write the proto-generation script**
+- [ ] **Step 3: proto 生成スクリプトを書く**
 
-Create `clients/python/scripts/generate_protos.sh`:
+`clients/python/scripts/generate_protos.sh` を作成:
 
 ```bash
 #!/usr/bin/env bash
@@ -119,13 +119,13 @@ find "$PB_DIR" -name '*.py' | sort
 chmod +x clients/python/scripts/generate_protos.sh
 ```
 
-- [ ] **Step 4: Run the generation script and verify the output**
+- [ ] **Step 4: 生成スクリプトを実行し、出力を確認する**
 
 Run: `cd clients/python && ./scripts/generate_protos.sh`
 
-Expected: ends with `Done. Generated files:` followed by a file listing that includes (at minimum) `grSim_Commands_pb2.py`, `grSim_Packet_pb2.py`, `ssl_vision_wrapper_pb2.py`, `ssl_vision_detection_pb2.py`, `ssl_vision_geometry_pb2.py`, `state/ssl_gc_referee_message_pb2.py`, `state/ssl_gc_game_event_pb2.py`, `state/ssl_gc_common_pb2.py`, `geom/ssl_gc_geometry_pb2.py`.
+Expected: `Done. Generated files:` で終わり、続くファイル一覧に少なくとも `grSim_Commands_pb2.py`、`grSim_Packet_pb2.py`、`ssl_vision_wrapper_pb2.py`、`ssl_vision_detection_pb2.py`、`ssl_vision_geometry_pb2.py`、`state/ssl_gc_referee_message_pb2.py`、`state/ssl_gc_game_event_pb2.py`、`state/ssl_gc_common_pb2.py`、`geom/ssl_gc_geometry_pb2.py` が含まれること。
 
-- [ ] **Step 5: Create the virtualenv and install dependencies**
+- [ ] **Step 5: 仮想環境を作成し依存関係をインストールする**
 
 ```bash
 cd clients/python
@@ -134,9 +134,9 @@ python3 -m venv venv
 ```
 
 Run: `./venv/bin/python -c "import google.protobuf; print(google.protobuf.__version__)"`
-Expected: prints a version number (e.g. `7.35.1`) with no error.
+Expected: エラーなくバージョン番号(例: `7.35.1`)が表示される。
 
-- [ ] **Step 6: Write `ssl_client/__init__.py` (sys.path + env var bootstrap)**
+- [ ] **Step 6: `ssl_client/__init__.py`(sys.path + 環境変数のブートストラップ)を書く**
 
 ```python
 import os
@@ -155,7 +155,7 @@ if str(_PB_DIR) not in sys.path:
     sys.path.insert(0, str(_PB_DIR))
 ```
 
-- [ ] **Step 7: Write `ssl_client/net.py`**
+- [ ] **Step 7: `ssl_client/net.py` を書く**
 
 ```python
 import socket
@@ -172,44 +172,46 @@ def open_multicast_socket(group: str, port: int) -> socket.socket:
     return sock
 ```
 
-- [ ] **Step 8: Write `pytest.ini`**
+- [ ] **Step 8: `pytest.ini` を書く**
 
 ```ini
 [pytest]
 testpaths = tests
 ```
 
-- [ ] **Step 9: Write `conftest.py`**
+- [ ] **Step 9: `conftest.py` を書く**
 
-Without this file, running `pytest` (the console-script entry point, not
-`python -m pytest`) from `clients/python/` does NOT put `clients/python`
-itself on `sys.path` — only `clients/python/tests` (since `tests/` has no
-`__init__.py`, pytest's default import mode inserts `tests/` itself as the
-import root for test modules). Every test module's `from ssl_client...`
-import would then fail with `ModuleNotFoundError: No module named
-'ssl_client'`. A `conftest.py` at `clients/python/` fixes this: pytest always
-inserts a conftest's own directory onto `sys.path` to import it, and it runs
-before any test module is collected — so it also guarantees the
-`PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION` + `pb/` bootstrap in
-`ssl_client/__init__.py` (Step 6) has already run before any test file's
-top-level `import ssl_vision_wrapper_pb2`-style import executes.
+このファイルがないと、`clients/python/` から `pytest`(コンソールスクリプト
+のエントリポイント。`python -m pytest` ではない)を実行しても
+`clients/python` 自体は `sys.path` に載らない — `clients/python/tests` だけ
+が載る(`tests/` に `__init__.py` がないため、pytest のデフォルトの import
+モードでは `tests/` 自体がテストモジュールの import ルートとして挿入され
+る)。その結果、各テストモジュールの `from ssl_client...` という import は
+すべて `ModuleNotFoundError: No module named 'ssl_client'` で失敗してしま
+う。`clients/python/` に置いた `conftest.py` はこれを解決する: pytest は
+conftest を import するために、その conftest 自身のディレクトリを常に
+`sys.path` に挿入し、これはどのテストモジュールが収集されるより前に実行
+される — したがって、どのテストファイルのトップレベルの
+`import ssl_vision_wrapper_pb2` 的な import が実行されるよりも前に、
+`ssl_client/__init__.py`(Step 6)の `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION`
++ `pb/` のブートストラップが既に実行済みであることも保証される。
 
-Create `clients/python/conftest.py`:
+`clients/python/conftest.py` を作成:
 
 ```python
 import ssl_client  # noqa: F401  (runs the pb/ sys.path + env var bootstrap)
 ```
 
-- [ ] **Step 10: Smoke-test that generated modules import correctly through the package**
+- [ ] **Step 10: 生成モジュールがパッケージ経由で正しく import できることをスモークテストする**
 
 Run:
 ```bash
 cd clients/python
 ./venv/bin/python -c "import ssl_client; import grSim_Packet_pb2; from state import ssl_gc_referee_message_pb2; print('imports OK')"
 ```
-Expected: `imports OK` with no error.
+Expected: エラーなく `imports OK` と表示される。
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 11: コミット**
 
 ```bash
 git add clients/python/requirements.txt clients/python/pytest.ini \
@@ -220,19 +222,19 @@ git commit -m "feat(clients/python): scaffold project and protobuf codegen"
 
 ---
 
-### Task 2: World model
+### Task 2: ワールドモデル
 
 **Files:**
 - Create: `clients/python/ssl_client/world.py`
 - Test: `clients/python/tests/test_world.py`
 
 **Interfaces:**
-- Consumes: generated `ssl_vision_detection_pb2`, `ssl_vision_geometry_pb2` (Task 1).
-- Produces: `BallObservation`, `RobotObservation`, `FieldGeometry`, `WorldModel` dataclasses; `update_from_detection_frame(world: WorldModel, detection: SSL_DetectionFrame) -> None`; `update_from_geometry_data(world: WorldModel, geometry: SSL_GeometryData) -> None`. Used by Task 3 (`vision.py`) and Task 6 (`strategy.py`).
+- Consumes: 生成された `ssl_vision_detection_pb2`、`ssl_vision_geometry_pb2`(Task 1)。
+- Produces: `BallObservation`、`RobotObservation`、`FieldGeometry`、`WorldModel` の各 dataclass。`update_from_detection_frame(world: WorldModel, detection: SSL_DetectionFrame) -> None`。`update_from_geometry_data(world: WorldModel, geometry: SSL_GeometryData) -> None`。Task 3(`vision.py`)と Task 6(`strategy.py`)で使用。
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: 失敗するテストを書く**
 
-Create `clients/python/tests/test_world.py`:
+`clients/python/tests/test_world.py` を作成:
 
 ```python
 import ssl_vision_detection_pb2
@@ -328,12 +330,12 @@ def test_update_from_geometry_data_converts_mm_to_meters():
     assert world.geometry.boundary_width == 0.3
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 2: テストを実行し、失敗することを確認する**
 
 Run: `cd clients/python && ./venv/bin/pytest tests/test_world.py -v`
-Expected: FAIL/ERROR — `ModuleNotFoundError: No module named 'ssl_client.world'` (the module does not exist yet).
+Expected: FAIL/ERROR — `ModuleNotFoundError: No module named 'ssl_client.world'`(モジュールがまだ存在しない)。
 
-- [ ] **Step 3: Write `ssl_client/world.py`**
+- [ ] **Step 3: `ssl_client/world.py` を書く**
 
 ```python
 from dataclasses import dataclass, field
@@ -418,12 +420,12 @@ def update_from_geometry_data(world: WorldModel, geometry) -> None:
     )
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: テストを実行し、成功することを確認する**
 
 Run: `cd clients/python && ./venv/bin/pytest tests/test_world.py -v`
-Expected: 4 passed.
+Expected: 4 passed。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: コミット**
 
 ```bash
 git add clients/python/ssl_client/world.py clients/python/tests/test_world.py
@@ -432,19 +434,19 @@ git commit -m "feat(clients/python): add world model with mm-to-meter conversion
 
 ---
 
-### Task 3: Vision receiver
+### Task 3: Vision 受信
 
 **Files:**
 - Create: `clients/python/ssl_client/vision.py`
 - Test: `clients/python/tests/test_vision.py`
 
 **Interfaces:**
-- Consumes: `WorldModel`, `update_from_detection_frame`, `update_from_geometry_data` (Task 2); `ssl_client.net.open_multicast_socket` (Task 1).
-- Produces: `parse_wrapper_packet(raw: bytes) -> SSL_WrapperPacket`; `apply_wrapper_packet(world: WorldModel, packet: SSL_WrapperPacket) -> None`; `VisionReceiver(world, group="224.5.23.2", port=10020)` with `.handle_packet(raw: bytes) -> None` and `.run_forever() -> None`. Used by Task 7 entrypoints.
+- Consumes: `WorldModel`、`update_from_detection_frame`、`update_from_geometry_data`(Task 2)。`ssl_client.net.open_multicast_socket`(Task 1)。
+- Produces: `parse_wrapper_packet(raw: bytes) -> SSL_WrapperPacket`。`apply_wrapper_packet(world: WorldModel, packet: SSL_WrapperPacket) -> None`。`VisionReceiver(world, group="224.5.23.2", port=10020)`(`.handle_packet(raw: bytes) -> None` と `.run_forever() -> None` を持つ)。Task 7 のエントリポイントで使用。
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: 失敗するテストを書く**
 
-Create `clients/python/tests/test_vision.py`:
+`clients/python/tests/test_vision.py` を作成:
 
 ```python
 import ssl_vision_wrapper_pb2
@@ -507,12 +509,12 @@ def test_vision_receiver_handle_packet_updates_its_world():
     assert world.ball.x == 0.1
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 2: テストを実行し、失敗することを確認する**
 
 Run: `cd clients/python && ./venv/bin/pytest tests/test_vision.py -v`
-Expected: FAIL/ERROR — `ModuleNotFoundError: No module named 'ssl_client.vision'`.
+Expected: FAIL/ERROR — `ModuleNotFoundError: No module named 'ssl_client.vision'`。
 
-- [ ] **Step 3: Write `ssl_client/vision.py`**
+- [ ] **Step 3: `ssl_client/vision.py` を書く**
 
 ```python
 import ssl_vision_wrapper_pb2
@@ -550,12 +552,12 @@ class VisionReceiver:
             self.handle_packet(raw)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: テストを実行し、成功することを確認する**
 
 Run: `cd clients/python && ./venv/bin/pytest tests/test_vision.py -v`
-Expected: 4 passed.
+Expected: 4 passed。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: コミット**
 
 ```bash
 git add clients/python/ssl_client/vision.py clients/python/tests/test_vision.py
@@ -564,19 +566,19 @@ git commit -m "feat(clients/python): add Vision receiver"
 
 ---
 
-### Task 4: Referee receiver
+### Task 4: Referee 受信
 
 **Files:**
 - Create: `clients/python/ssl_client/referee.py`
 - Test: `clients/python/tests/test_referee.py`
 
 **Interfaces:**
-- Consumes: `ssl_client.net.open_multicast_socket` (Task 1); generated `state.ssl_gc_referee_message_pb2` (Task 1).
-- Produces: `parse_referee_packet(raw: bytes) -> Referee`; `is_match_running(msg: Referee) -> bool`; `RefereeReceiver(group="224.5.23.1", port=10003)` with `.handle_packet(raw: bytes) -> None`, `.is_running() -> bool`, `.run_forever() -> None`. Used by Task 7 entrypoints.
+- Consumes: `ssl_client.net.open_multicast_socket`(Task 1)。生成された `state.ssl_gc_referee_message_pb2`(Task 1)。
+- Produces: `parse_referee_packet(raw: bytes) -> Referee`。`is_match_running(msg: Referee) -> bool`。`RefereeReceiver(group="224.5.23.1", port=10003)`(`.handle_packet(raw: bytes) -> None`、`.is_running() -> bool`、`.run_forever() -> None` を持つ)。Task 7 のエントリポイントで使用。
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: 失敗するテストを書く**
 
-Create `clients/python/tests/test_referee.py`:
+`clients/python/tests/test_referee.py` を作成:
 
 ```python
 from state import ssl_gc_referee_message_pb2 as referee_pb2
@@ -634,12 +636,12 @@ def test_referee_receiver_reflects_latest_packet():
     assert receiver.is_running() is True
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 2: テストを実行し、失敗することを確認する**
 
 Run: `cd clients/python && ./venv/bin/pytest tests/test_referee.py -v`
-Expected: FAIL/ERROR — `ModuleNotFoundError: No module named 'ssl_client.referee'`.
+Expected: FAIL/ERROR — `ModuleNotFoundError: No module named 'ssl_client.referee'`。
 
-- [ ] **Step 3: Write `ssl_client/referee.py`**
+- [ ] **Step 3: `ssl_client/referee.py` を書く**
 
 ```python
 from typing import Optional
@@ -684,12 +686,12 @@ class RefereeReceiver:
             self.handle_packet(raw)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: テストを実行し、成功することを確認する**
 
 Run: `cd clients/python && ./venv/bin/pytest tests/test_referee.py -v`
-Expected: 5 passed.
+Expected: 5 passed。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: コミット**
 
 ```bash
 git add clients/python/ssl_client/referee.py clients/python/tests/test_referee.py
@@ -698,19 +700,19 @@ git commit -m "feat(clients/python): add Referee receiver"
 
 ---
 
-### Task 5: Command builder and sender
+### Task 5: コマンド組み立てと送信
 
 **Files:**
 - Create: `clients/python/ssl_client/commands.py`
 - Test: `clients/python/tests/test_commands.py`
 
 **Interfaces:**
-- Consumes: generated `grSim_Packet_pb2` (Task 1).
-- Produces: `RobotCommand` dataclass (`robot_id: int, vel_x: float, vel_y: float, vel_angular: float, robot_orientation: float, kick_speed: float = 0.0, chip_speed: float = 0.0, dribble: bool = False`); `global_to_local(vel_x, vel_y, orientation) -> tuple[float, float]`; `build_packet(is_team_yellow: bool, commands: list[RobotCommand]) -> bytes`; `CommandSender(host="127.0.0.1", port=20011)` with `.send(is_team_yellow: bool, commands: list[RobotCommand]) -> None`. `RobotCommand` and `build_packet` are consumed by Task 6 (`strategy.py`) and Task 7 (entrypoints).
+- Consumes: 生成された `grSim_Packet_pb2`(Task 1)。
+- Produces: `RobotCommand` dataclass(`robot_id: int, vel_x: float, vel_y: float, vel_angular: float, robot_orientation: float, kick_speed: float = 0.0, chip_speed: float = 0.0, dribble: bool = False`)。`global_to_local(vel_x, vel_y, orientation) -> tuple[float, float]`。`build_packet(is_team_yellow: bool, commands: list[RobotCommand]) -> bytes`。`CommandSender(host="127.0.0.1", port=20011)`(`.send(is_team_yellow: bool, commands: list[RobotCommand]) -> None` を持つ)。`RobotCommand` と `build_packet` は Task 6(`strategy.py`)と Task 7(エントリポイント)で使用される。
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: 失敗するテストを書く**
 
-Create `clients/python/tests/test_commands.py`:
+`clients/python/tests/test_commands.py` を作成:
 
 ```python
 import math
@@ -774,12 +776,12 @@ def test_build_packet_with_no_commands_is_still_valid():
     assert len(parsed.commands.robot_commands) == 0
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 2: テストを実行し、失敗することを確認する**
 
 Run: `cd clients/python && ./venv/bin/pytest tests/test_commands.py -v`
-Expected: FAIL/ERROR — `ModuleNotFoundError: No module named 'ssl_client.commands'`.
+Expected: FAIL/ERROR — `ModuleNotFoundError: No module named 'ssl_client.commands'`。
 
-- [ ] **Step 3: Write `ssl_client/commands.py`**
+- [ ] **Step 3: `ssl_client/commands.py` を書く**
 
 ```python
 import math
@@ -838,12 +840,12 @@ class CommandSender:
         self._sock.sendto(data, (self.host, self.port))
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: テストを実行し、成功することを確認する**
 
 Run: `cd clients/python && ./venv/bin/pytest tests/test_commands.py -v`
-Expected: 4 passed.
+Expected: 4 passed。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: コミット**
 
 ```bash
 git add clients/python/ssl_client/commands.py clients/python/tests/test_commands.py
@@ -852,19 +854,19 @@ git commit -m "feat(clients/python): add grSim command builder and UDP sender"
 
 ---
 
-### Task 6: Strategy (role assignment and formation)
+### Task 6: 戦略(ロール割当てとフォーメーション)
 
 **Files:**
 - Create: `clients/python/ssl_client/strategy.py`
 - Test: `clients/python/tests/test_strategy.py`
 
 **Interfaces:**
-- Consumes: `WorldModel`, `BallObservation`, `RobotObservation`, `FieldGeometry` (Task 2); `RobotCommand` (Task 5).
-- Produces: `TeamConfig` dataclass (`is_team_yellow: bool, defend_positive_x: bool`); `TeamStrategy(config: TeamConfig)` with `.compute_commands(world: WorldModel, referee_running: bool) -> list[RobotCommand]`. Used by Task 7 entrypoints.
+- Consumes: `WorldModel`、`BallObservation`、`RobotObservation`、`FieldGeometry`(Task 2)。`RobotCommand`(Task 5)。
+- Produces: `TeamConfig` dataclass(`is_team_yellow: bool, defend_positive_x: bool`)。`TeamStrategy(config: TeamConfig)`(`.compute_commands(world: WorldModel, referee_running: bool) -> list[RobotCommand]` を持つ)。Task 7 のエントリポイントで使用。
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: 失敗するテストを書く**
 
-Create `clients/python/tests/test_strategy.py`:
+`clients/python/tests/test_strategy.py` を作成:
 
 ```python
 from ssl_client.strategy import TeamConfig, TeamStrategy
@@ -1066,12 +1068,12 @@ def test_apply_separation_does_nothing_when_robots_are_far_apart():
     assert vy == 0.5
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 2: テストを実行し、失敗することを確認する**
 
 Run: `cd clients/python && ./venv/bin/pytest tests/test_strategy.py -v`
-Expected: FAIL/ERROR — `ModuleNotFoundError: No module named 'ssl_client.strategy'`.
+Expected: FAIL/ERROR — `ModuleNotFoundError: No module named 'ssl_client.strategy'`。
 
-- [ ] **Step 3: Write `ssl_client/strategy.py`**
+- [ ] **Step 3: `ssl_client/strategy.py` を書く**
 
 ```python
 import math
@@ -1252,12 +1254,12 @@ class TeamStrategy:
         return commands
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: テストを実行し、成功することを確認する**
 
 Run: `cd clients/python && ./venv/bin/pytest tests/test_strategy.py -v`
-Expected: 11 passed.
+Expected: 11 passed。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: コミット**
 
 ```bash
 git add clients/python/ssl_client/strategy.py clients/python/tests/test_strategy.py
@@ -1266,17 +1268,17 @@ git commit -m "feat(clients/python): add role-assignment and formation strategy"
 
 ---
 
-### Task 7: Entry points (`team_blue.py`, `team_yellow.py`)
+### Task 7: エントリポイント(`team_blue.py`、`team_yellow.py`)
 
 **Files:**
 - Create: `clients/python/team_blue.py`
 - Create: `clients/python/team_yellow.py`
 
 **Interfaces:**
-- Consumes: `WorldModel` (Task 2), `VisionReceiver` (Task 3), `RefereeReceiver` (Task 4), `CommandSender` (Task 5), `TeamConfig`/`TeamStrategy` (Task 6).
-- Produces: two runnable scripts; no further consumers (this is the top of the dependency graph). Not unit tested — verified manually in Task 8.
+- Consumes: `WorldModel`(Task 2)、`VisionReceiver`(Task 3)、`RefereeReceiver`(Task 4)、`CommandSender`(Task 5)、`TeamConfig`/`TeamStrategy`(Task 6)。
+- Produces: 実行可能な2つのスクリプト。これ以上の消費者はいない(依存関係グラフの頂点)。単体テストの対象ではなく、Task 8 で手動確認する。
 
-- [ ] **Step 1: Write `clients/python/team_blue.py`**
+- [ ] **Step 1: `clients/python/team_blue.py` を書く**
 
 ```python
 #!/usr/bin/env python3
@@ -1338,7 +1340,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Write `clients/python/team_yellow.py`**
+- [ ] **Step 2: `clients/python/team_yellow.py` を書く**
 
 ```python
 #!/usr/bin/env python3
@@ -1400,7 +1402,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Smoke-test both entrypoints start and shut down cleanly (grSim does not need to be running yet)**
+- [ ] **Step 3: 両エントリポイントが正常に起動・終了することをスモークテストする(grSim はまだ起動していなくてよい)**
 
 Run:
 ```bash
@@ -1408,9 +1410,9 @@ cd clients/python
 timeout 2 ./venv/bin/python team_blue.py || true
 timeout 2 ./venv/bin/python team_yellow.py || true
 ```
-Expected: each prints its `[blue] sending commands to 127.0.0.1:20011` / `[yellow] ...` line and exits after ~2s via the `timeout` wrapper, with no traceback (socket errors are fine to see if nothing is listening on the vision/referee ports — the `daemon=True` receiver threads simply won't receive anything; there must be no `ModuleNotFoundError`, `AttributeError`, or similar startup crash).
+Expected: それぞれ `[blue] sending commands to 127.0.0.1:20011` / `[yellow] ...` の行を出力し、`timeout` ラッパーによって約2秒後に終了する。トレースバックは出ないこと(vision/referee ポートを誰も listen していない場合にソケットエラーが見えるのは問題ない — `daemon=True` の受信スレッドは単に何も受信しないだけ。`ModuleNotFoundError`、`AttributeError` などの起動クラッシュがあってはならない)。
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: コミット**
 
 ```bash
 git add clients/python/team_blue.py clients/python/team_yellow.py
@@ -1419,16 +1421,16 @@ git commit -m "feat(clients/python): add team_blue and team_yellow entrypoints"
 
 ---
 
-### Task 8: Setup and manual verification README
+### Task 8: セットアップと手動検証の README
 
 **Files:**
 - Create: `clients/python/README.md`
 
 **Interfaces:**
-- Consumes: nothing (documentation only).
-- Produces: nothing consumed by other tasks; this is the final task.
+- Consumes: なし(ドキュメントのみ)。
+- Produces: 他のタスクからは消費されない。これが最後のタスク。
 
-- [ ] **Step 1: Write `clients/python/README.md`**
+- [ ] **Step 1: `clients/python/README.md` を書く**
 
 ```markdown
 # grSim Python match clients
@@ -1509,12 +1511,16 @@ building, strategy role assignment). It does not require grSim or
 ssl-game-controller to be running.
 ```
 
-- [ ] **Step 2: Run the full test suite one more time to confirm everything still passes together**
+(このステップで書いた `README.md` は、その後 Task 5(戦術的パスワーク)
+のマージに伴って書き直され、現在は日本語版になっている — 上記は Task 8
+実行時点の内容の記録。)
+
+- [ ] **Step 2: テストスイート全体をもう一度実行し、すべて一緒にパスすることを確認する**
 
 Run: `cd clients/python && ./venv/bin/pytest -v`
-Expected: 28 passed (4 in test_world.py + 4 in test_vision.py + 5 in test_referee.py + 4 in test_commands.py + 11 in test_strategy.py).
+Expected: 28 passed(test_world.py の 4 + test_vision.py の 4 + test_referee.py の 5 + test_commands.py の 4 + test_strategy.py の 11)。
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: コミット**
 
 ```bash
 git add clients/python/README.md
