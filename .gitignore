@@ -9,3 +9,6 @@ Thumbs.db
 *.iml
 cmake-build-debug
 cmake-build-release
+.claude/
+docs/superpowers/
+out/
