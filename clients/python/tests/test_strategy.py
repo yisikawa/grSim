@@ -255,6 +255,25 @@ def test_holder_kicks_a_pass_toward_open_mate_and_enters_pass_in_flight():
     assert strategy._receiver_id == 2
 
 
+def test_receiver_plays_support_on_the_kick_tick_itself():
+    strategy = _blue_strategy()
+    # Same pass-kick scenario as above. The PASS_IN_FLIGHT transition happens
+    # at the END of the kick tick, so on that tick the designated receiver
+    # (id 2) must still get a plain support command (support commands never
+    # set dribble; receiver/chaser commands do) — deterministically,
+    # regardless of robot-dict iteration order.
+    world = _world(
+        ball_xy=(0.0, 0.05),
+        blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 1.5707963267948966), (2, 0.0, 2.0, 0.0)],
+    )
+
+    commands = strategy.compute_commands(world, referee_running=True)
+
+    assert strategy._state == "PASS_IN_FLIGHT"  # visible after the tick
+    receiver_cmd = next(c for c in commands if c.robot_id == 2)
+    assert receiver_cmd.dribble is False
+
+
 def test_holder_does_not_kick_before_facing_the_pass_target():
     strategy = _blue_strategy()
     # 同じ配置だがホルダーは +x(0.0)を向いている: 味方は +y 方向なので

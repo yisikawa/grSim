@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from .commands import RobotCommand
 from .evaluation import choose_action
@@ -52,6 +52,9 @@ class TeamStrategy:
         self._state: str = STATE_CHASE
         self._receiver_id: Optional[int] = None
         self._pass_kick_time: float = 0.0
+        # (receiver_id, kick_time) recorded by the holder mid-loop; applied at
+        # the end of the tick so every robot sees the pre-kick state this tick.
+        self._pending_pass: Optional[Tuple[int, float]] = None
 
     # --- state machine -------------------------------------------------
 
@@ -78,6 +81,7 @@ class TeamStrategy:
     def _enter_chase(self):
         self._state = STATE_CHASE
         self._receiver_id = None
+        self._pending_pass = None
 
     # --- main entry -----------------------------------------------------
 
@@ -153,6 +157,11 @@ class TeamStrategy:
                         rid, robot, world, ball, own_robots, opponents, forward_sign
                     )
                 )
+
+        if self._pending_pass is not None:
+            self._receiver_id, self._pass_kick_time = self._pending_pass
+            self._state = STATE_PASS_IN_FLIGHT
+            self._pending_pass = None
         return commands
 
     # --- per-role command builders ---------------------------------------
@@ -197,9 +206,10 @@ class TeamStrategy:
         aligned = abs(angle_error) < KICK_ANGLE_TOLERANCE
         kick = action.kick_speed if (aligned and ball_dist < KICK_RANGE_M) else 0.0
         if kick > 0.0 and action.kind == "pass":
-            self._state = STATE_PASS_IN_FLIGHT
-            self._receiver_id = action.receiver_id
-            self._pass_kick_time = ball.t_capture
+            # Record only; compute_commands applies the PASS_IN_FLIGHT
+            # transition at the end of the tick so robots iterated after the
+            # holder still see the pre-kick state (deterministic roles).
+            self._pending_pass = (action.receiver_id, ball.t_capture)
         return RobotCommand(
             rid, vx, vy, vel_angular, robot.orientation, kick_speed=kick, dribble=True
         )
