@@ -3,12 +3,33 @@ from typing import Dict, Optional
 
 _MM_TO_M = 1.0 / 1000.0
 
+_VELOCITY_EMA_ALPHA = 0.5
+_MAX_FRAME_GAP_S = 0.5  # beyond this, treat as a dropped-frame gap and hold velocity
+
+
+def estimate_ball_velocity(prev, x: float, y: float, t_capture: float):
+    """Finite-difference ball velocity from the previous observation,
+    EMA-smoothed. Holds the previous velocity across bad dt (<= 0 or
+    dropped frames). Returns (0.0, 0.0) for the first observation."""
+    if prev is None:
+        return 0.0, 0.0
+    dt = t_capture - prev.t_capture
+    if dt <= 0.0 or dt > _MAX_FRAME_GAP_S:
+        return prev.vx, prev.vy
+    raw_vx = (x - prev.x) / dt
+    raw_vy = (y - prev.y) / dt
+    vx = _VELOCITY_EMA_ALPHA * raw_vx + (1.0 - _VELOCITY_EMA_ALPHA) * prev.vx
+    vy = _VELOCITY_EMA_ALPHA * raw_vy + (1.0 - _VELOCITY_EMA_ALPHA) * prev.vy
+    return vx, vy
+
 
 @dataclass
 class BallObservation:
     x: float  # meters, field frame
     y: float  # meters, field frame
     t_capture: float
+    vx: float = 0.0  # m/s, field frame, EMA-smoothed finite difference
+    vy: float = 0.0  # m/s
 
 
 @dataclass
@@ -40,10 +61,11 @@ class WorldModel:
 def update_from_detection_frame(world: WorldModel, detection) -> None:
     if detection.balls:
         ball = max(detection.balls, key=lambda b: b.confidence)
+        x = ball.x * _MM_TO_M
+        y = ball.y * _MM_TO_M
+        vx, vy = estimate_ball_velocity(world.ball, x, y, detection.t_capture)
         world.ball = BallObservation(
-            x=ball.x * _MM_TO_M,
-            y=ball.y * _MM_TO_M,
-            t_capture=detection.t_capture,
+            x=x, y=y, t_capture=detection.t_capture, vx=vx, vy=vy
         )
 
     for robot in detection.robots_blue:

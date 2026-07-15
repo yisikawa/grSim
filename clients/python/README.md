@@ -46,10 +46,13 @@ You need three things running at once, each in its own terminal:
 ## Verifying it works
 
 1. With all three running, open the ssl-game-controller web UI and click
-   **Force Start**. Both teams' robots should start moving: one robot per
-   team drives toward the ball, one stays on its own goal line and tracks the
-   ball's sideways position, and the rest hold loose positions in front of
-   their own goal.
+   **Force Start**. Both teams now play a possession-first passing game:
+   the robot that reaches the ball first takes possession (dribbler on),
+   turns toward the best-scoring option, and passes to an open teammate —
+   shooting only when close to the goal with an open shot lane. While a
+   pass is in flight, the designated receiver moves onto the ball's path
+   to trap it. Robots without the ball shift around their formation slots
+   to keep an open passing lane from the ball.
 2. Click **Stop** (or **Halt**) in the web UI. All robots on both teams
    should immediately stop moving.
 3. Click **Force Start** again to resume.

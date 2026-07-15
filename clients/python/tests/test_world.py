@@ -5,11 +5,11 @@ import ssl_vision_geometry_pb2
 from ssl_client.world import WorldModel, update_from_detection_frame, update_from_geometry_data
 
 
-def _make_detection_frame(ball_xy=None, blue=(), yellow=()):
+def _make_detection_frame(ball_xy=None, blue=(), yellow=(), t_capture=123.456):
     frame = ssl_vision_detection_pb2.SSL_DetectionFrame()
     frame.frame_number = 1
-    frame.t_capture = 123.456
-    frame.t_sent = 123.456
+    frame.t_capture = t_capture
+    frame.t_sent = t_capture
     frame.camera_id = 0
     if ball_xy is not None:
         ball = frame.balls.add()
@@ -90,3 +90,43 @@ def test_update_from_geometry_data_converts_mm_to_meters():
     assert world.geometry.goal_width == 1.0
     assert world.geometry.goal_depth == 0.18
     assert world.geometry.boundary_width == 0.3
+
+
+def test_first_ball_observation_has_zero_velocity():
+    world = WorldModel()
+    update_from_detection_frame(world, _make_detection_frame(ball_xy=(0.0, 0.0), t_capture=0.0))
+
+    assert world.ball.vx == 0.0
+    assert world.ball.vy == 0.0
+
+
+def test_ball_velocity_is_ema_smoothed_finite_difference():
+    world = WorldModel()
+    # 0.1 s ごとに +x へ 0.1 m 移動 => 生の速度 1.0 m/s
+    update_from_detection_frame(world, _make_detection_frame(ball_xy=(0.0, 0.0), t_capture=0.0))
+    update_from_detection_frame(world, _make_detection_frame(ball_xy=(100.0, 0.0), t_capture=0.1))
+    # EMA(alpha=0.5): 0.5 * 1.0 + 0.5 * 0.0 = 0.5
+    assert world.ball.vx == pytest.approx(0.5)
+    assert world.ball.vy == pytest.approx(0.0)
+
+    update_from_detection_frame(world, _make_detection_frame(ball_xy=(200.0, 0.0), t_capture=0.2))
+    # 0.5 * 1.0 + 0.5 * 0.5 = 0.75
+    assert world.ball.vx == pytest.approx(0.75)
+
+
+def test_ball_velocity_held_when_dt_is_zero_or_frame_gap_too_large():
+    from ssl_client.world import BallObservation, estimate_ball_velocity
+
+    prev = BallObservation(x=0.0, y=0.0, t_capture=1.0, vx=0.5, vy=-0.2)
+    # dt = 0
+    assert estimate_ball_velocity(prev, 1.0, 1.0, 1.0) == (0.5, -0.2)
+    # dt < 0(順序が乱れたフレーム)
+    assert estimate_ball_velocity(prev, 1.0, 1.0, 0.5) == (0.5, -0.2)
+    # dt > 0.5 s(フレーム落ち)
+    assert estimate_ball_velocity(prev, 1.0, 1.0, 2.0) == (0.5, -0.2)
+
+
+def test_estimate_ball_velocity_none_prev_returns_zero():
+    from ssl_client.world import estimate_ball_velocity
+
+    assert estimate_ball_velocity(None, 1.0, 2.0, 0.0) == (0.0, 0.0)
