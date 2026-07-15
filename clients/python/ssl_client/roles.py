@@ -79,15 +79,23 @@ def apply_separation(rid, vx: float, vy: float, robot, own_robots: dict):
     return vx, vy
 
 
-def own_goal_x(world, defend_positive_x: bool) -> float:
-    half_length = world.geometry.field_length / 2.0
+def _own_goal_x_from_geometry(geometry, defend_positive_x: bool) -> float:
+    half_length = geometry.field_length / 2.0
     return half_length if defend_positive_x else -half_length
 
 
-def goalkeeper_target(world, defend_positive_x: bool):
-    half_goal = world.geometry.goal_width / 2.0
-    target_y = max(-half_goal, min(half_goal, world.ball.y))
-    return own_goal_x(world, defend_positive_x), target_y
+def own_goal_x(world, defend_positive_x: bool) -> float:
+    return _own_goal_x_from_geometry(world.geometry, defend_positive_x)
+
+
+def goalkeeper_target(geometry, ball_y: float, defend_positive_x: bool):
+    """Like own_goal_x, but takes explicit geometry/ball_y values rather than
+    a WorldModel so callers can pass a single consistent snapshot instead of
+    re-reading world.ball / world.geometry (which can be mutated concurrently
+    by the Vision receiver thread)."""
+    half_goal = geometry.goal_width / 2.0
+    target_y = max(-half_goal, min(half_goal, ball_y))
+    return _own_goal_x_from_geometry(geometry, defend_positive_x), target_y
 
 
 def formation_target(world, defend_positive_x: bool, slot_index: int, ball_x: float):

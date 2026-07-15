@@ -112,6 +112,7 @@ class TeamStrategy:
             self._formation_slots.setdefault(rid, slot_index)
 
         ball = world.ball
+        geometry = world.geometry
         holder_id = None
         holders = [rid for rid in non_keeper_ids if _holds_ball(own_robots[rid], ball)]
         if holders:
@@ -140,7 +141,9 @@ class TeamStrategy:
         commands = []
         for rid, robot in own_robots.items():
             if rid == self._goalkeeper_id:
-                commands.append(self._keeper_command(rid, robot, world, own_robots))
+                commands.append(
+                    self._keeper_command(rid, robot, geometry, ball, own_robots)
+                )
             elif self._state == STATE_POSSESS and rid == holder_id:
                 commands.append(
                     self._holder_command(
@@ -166,8 +169,10 @@ class TeamStrategy:
 
     # --- per-role command builders ---------------------------------------
 
-    def _keeper_command(self, rid, robot, world, own_robots):
-        target_x, target_y = goalkeeper_target(world, self._config.defend_positive_x)
+    def _keeper_command(self, rid, robot, geometry, ball, own_robots):
+        target_x, target_y = goalkeeper_target(
+            geometry, ball.y, self._config.defend_positive_x
+        )
         vx, vy = seek(robot.x, robot.y, target_x, target_y)
         vx, vy = apply_separation(rid, vx, vy, robot, own_robots)
         return RobotCommand(rid, vx, vy, 0.0, robot.orientation)

@@ -1,3 +1,5 @@
+import math
+
 from ssl_client.strategy import TeamConfig, TeamStrategy
 from ssl_client.world import BallObservation, FieldGeometry, RobotObservation, WorldModel
 
@@ -311,17 +313,23 @@ def test_holder_prefers_pass_when_shot_lane_is_blocked():
     strategy = _blue_strategy()
     # 同じくゴールまで 1.0 m だが、敵がシュートラインを塞ぐ。
     # 味方(id 2)へのラインは開いている => パスを選ぶ。
+    # ホルダーは味方(2.0, 1.5)の方を向いている
+    # (atan2(1.5-0.0, 2.0-3.45) ≈ 2.34 rad) => このティックで即キックし、
+    # パスが実際に選ばれたことをエンドツーエンドで確認できる。
+    holder_orientation = math.atan2(1.5 - 0.0, 2.0 - 3.45)
     world = _world(
         ball_xy=(3.5, 0.0),
-        blue=[(0, -4.4, 0.0, 0.0), (1, 3.45, 0.0, 0.0), (2, 2.0, 1.5, 0.0)],
+        blue=[(0, -4.4, 0.0, 0.0), (1, 3.45, 0.0, holder_orientation), (2, 2.0, 1.5, 0.0)],
         yellow=[(0, 4.0, 0.0, 0.0)],
     )
 
     commands = strategy.compute_commands(world, referee_running=True)
 
     holder_cmd = next(c for c in commands if c.robot_id == 1)
-    assert holder_cmd.kick_speed != 4.0  # シュートではない(0 か パス強度)
-    # 蹴れる向きならパス強度、向きが合うまでは 0 — どちらでもシュートでなければよい
+    assert holder_cmd.kick_speed != 4.0  # シュートではない
+    assert 1.5 <= holder_cmd.kick_speed <= 3.5  # パス強度が実際に発射された
+    assert strategy._state == "PASS_IN_FLIGHT"
+    assert strategy._receiver_id == 2
 
 
 def test_receiver_intercepts_moving_ball_during_pass_in_flight():
