@@ -3,59 +3,59 @@
 grSim
 =======================
 
-[RoboCup Small Size League](https://ssl.robocup.org/) Simulator.
+[RoboCup Small Size League](https://ssl.robocup.org/) シミュレータ。
 
 ![grSim on Ubuntu](docs/img/screenshot01.jpg?raw=true "grSim on Ubuntu")
 
-- [Install instructions](INSTALL.md)
-- [Authors](AUTHORS.md)
-- [Changelog](CHANGELOG.md)
-- License: [GNU General Public License (GPLv3)](LICENSE.md)
+- [インストール手順](INSTALL.md)
+- [作者](AUTHORS.md)
+- [変更履歴](CHANGELOG.md)
+- ライセンス: [GNU General Public License (GPLv3)](LICENSE.md)
 
-System Requirements
+システム要件
 -----------------------
 
-grSim will likely run on a modern dual-core PC with a decent graphics card. A typical configuration is:
+grSim は、そこそこのグラフィックカードを積んだ最近のデュアルコア PC であればおおむね動作する。典型的な構成は以下の通り:
 
-- Dual Core CPU (2.0 Ghz+)
-- 1GB of RAM
-- 256MB nVidia or ATI graphics card
+- デュアルコア CPU(2.0 GHz 以上)
+- 1GB の RAM
+- 256MB の nVidia または ATI グラフィックカード
 
-Note that it may run on lower-end equipment though good performance is not guaranteed.
+より低スペックな環境でも動作する可能性はあるが、快適な性能は保証されない。
 
 
-Software Requirements
+ソフトウェア要件
 ---------------------
 
-grSim compiles on Linux (tested on Ubuntu and Arch Linux variants only) and Mac OS. It depends on the following libraries:
+grSim は Linux(Ubuntu および Arch Linux 系のみで動作確認済み)と Mac OS 上でビルドできる。以下のライブラリに依存する:
 
-- [CMake](https://cmake.org/) version 3.5+
+- [CMake](https://cmake.org/) バージョン 3.5 以上
 - [pkg-config](https://freedesktop.org/wiki/Software/pkg-config/)
 - [OpenGL](https://www.opengl.org)
 - [Qt5 Development Libraries](https://www.qt.io)
 - [Open Dynamics Engine (ODE)](http://www.ode.org)
-- [VarTypes Library](https://github.com/jpfeltracco/vartypes) forked from [Szi's Vartypes](https://github.com/szi/vartypes)
+- [VarTypes Library](https://github.com/jpfeltracco/vartypes)([Szi's Vartypes](https://github.com/szi/vartypes) からのフォーク)
 - [Google Protobuf](https://github.com/google/protobuf)
-- [Boost development libraries](http://www.boost.org/) (needed by VarTypes)
+- [Boost development libraries](http://www.boost.org/)(VarTypes が必要とする)
 
-Please consult the [install instructions](INSTALL.md) for more details.
+詳細は [インストール手順](INSTALL.md) を参照。
 
-Usage
+使い方
 -----
 
-Receiving data from the grSim is similar to receiving data from the [SSL-Vision](https://github.com/RoboCup-SSL/ssl-vision) using [Google Protobuf](https://github.com/google/protobuf) library.
-Sending data to the simulator is also possible using Google Protobuf. Sample clients are included in [clients](./clients) folder. There are two clients available, *qt-based* and *Java-based*. The native client is compiled during the grSim compilation. To compile the Java client, please consult the corresponding `README` file.
+grSim からデータを受信する方法は、[Google Protobuf](https://github.com/google/protobuf) ライブラリを使って [SSL-Vision](https://github.com/RoboCup-SSL/ssl-vision) からデータを受信する場合と同様である。
+Google Protobuf を使ってシミュレータへデータを送信することも可能。サンプルクライアントは [clients](./clients) フォルダに含まれている。*Qt ベース* と *Java ベース* の2種類のクライアントが利用可能。ネイティブクライアントは grSim のコンパイル時に一緒にビルドされる。Java クライアントをコンパイルするには、対応する `README` ファイルを参照すること。
 
-Qt [example project](https://github.com/robocin/ssl-client) to receive and send data to the simulator.
+シミュレータとデータを送受信するための Qt の[サンプルプロジェクト](https://github.com/robocin/ssl-client)。
 
 Star History
 ------
 [![Star History Chart](https://api.star-history.com/svg?repos=robocup-ssl/grsim&type=Date)](https://star-history.com/#robocup-ssl/grsim&Date)
 
-Citing
+引用
 ------
 
-If you use this in your research, please cite the original paper:
+研究で本ソフトウェアを利用する場合は、オリジナルの論文を引用すること:
 ```
 @inproceedings{Monajjemi2011grSimR,
   title={grSim - RoboCup Small Size Robot Soccer Simulator},
@@ -65,7 +65,7 @@ If you use this in your research, please cite the original paper:
 }
 ```
 
-If you wish to cite this repo with it's modifications specifically, please cite:
+本リポジトリとその改変部分を特に引用したい場合は、以下を引用すること:
 
 ```
 @misc{grsim2021,
