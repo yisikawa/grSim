@@ -2,16 +2,18 @@ from ssl_client.strategy import TeamConfig, TeamStrategy
 from ssl_client.world import BallObservation, FieldGeometry, RobotObservation, WorldModel
 
 
-def _world(ball_xy, blue=(), yellow=()):
+def _world(ball_xy, blue=(), yellow=(), ball_v=(0.0, 0.0), t_capture=0.0):
     world = WorldModel()
-    world.ball = BallObservation(x=ball_xy[0], y=ball_xy[1], t_capture=0.0)
+    world.ball = BallObservation(
+        x=ball_xy[0], y=ball_xy[1], t_capture=t_capture, vx=ball_v[0], vy=ball_v[1]
+    )
     world.geometry = FieldGeometry(
         field_length=9.0, field_width=6.0, goal_width=1.0, goal_depth=0.18, boundary_width=0.3
     )
     for robot_id, x, y, orientation in blue:
-        world.blue_robots[robot_id] = RobotObservation(robot_id, x, y, orientation, 0.0)
+        world.blue_robots[robot_id] = RobotObservation(robot_id, x, y, orientation, t_capture)
     for robot_id, x, y, orientation in yellow:
-        world.yellow_robots[robot_id] = RobotObservation(robot_id, x, y, orientation, 0.0)
+        world.yellow_robots[robot_id] = RobotObservation(robot_id, x, y, orientation, t_capture)
     return world
 
 
@@ -195,3 +197,253 @@ def test_apply_separation_does_nothing_when_robots_are_far_apart():
 
     assert vx == 1.0
     assert vy == 0.5
+
+
+# --- passing state machine ---
+
+
+def _blue_strategy():
+    return TeamStrategy(TeamConfig(is_team_yellow=False, defend_positive_x=False))
+
+
+def test_state_is_chase_when_nobody_holds_the_ball():
+    strategy = _blue_strategy()
+    world = _world(ball_xy=(2.0, 0.0), blue=[(0, -4.4, 0.0, 0.0), (1, -1.0, 0.0, 0.0)])
+
+    strategy.compute_commands(world, referee_running=True)
+
+    assert strategy._state == "CHASE"
+
+
+def test_state_becomes_possess_when_a_robot_holds_a_slow_ball():
+    strategy = _blue_strategy()
+    world = _world(ball_xy=(1.0, 0.0), blue=[(0, -4.4, 0.0, 0.0), (1, 0.95, 0.0, 0.0)])
+
+    strategy.compute_commands(world, referee_running=True)
+
+    assert strategy._state == "POSSESS"
+
+
+def test_fast_ball_nearby_does_not_count_as_possession():
+    strategy = _blue_strategy()
+    world = _world(
+        ball_xy=(1.0, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, 0.95, 0.0, 0.0)],
+        ball_v=(1.5, 0.0),
+    )
+
+    strategy.compute_commands(world, referee_running=True)
+
+    assert strategy._state == "CHASE"
+
+
+def test_holder_kicks_a_pass_toward_open_mate_and_enters_pass_in_flight():
+    strategy = _blue_strategy()
+    # ホルダー(id 1)はボールを保持し、味方(id 2)は +y 方向 2 m(良い距離、
+    # 敵なし => パスコース全開)。ゴール(x=+4.5)までは 4.5 m > 2.5 m なので
+    # シュートは選ばれない。ホルダーは既に +y(pi/2)を向いている => 即キック。
+    world = _world(
+        ball_xy=(0.0, 0.05),
+        blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 1.5707963267948966), (2, 0.0, 2.0, 0.0)],
+    )
+
+    commands = strategy.compute_commands(world, referee_running=True)
+
+    holder_cmd = next(c for c in commands if c.robot_id == 1)
+    assert 1.5 <= holder_cmd.kick_speed <= 3.5  # パス強度(シュートの 4.0 ではない)
+    assert strategy._state == "PASS_IN_FLIGHT"
+    assert strategy._receiver_id == 2
+
+
+def test_holder_does_not_kick_before_facing_the_pass_target():
+    strategy = _blue_strategy()
+    # 同じ配置だがホルダーは +x(0.0)を向いている: 味方は +y 方向なので
+    # 角度誤差 pi/2 > 0.35 => まず旋回、キックしない。
+    world = _world(
+        ball_xy=(0.0, 0.05),
+        blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 0.0), (2, 0.0, 2.0, 0.0)],
+    )
+
+    commands = strategy.compute_commands(world, referee_running=True)
+
+    holder_cmd = next(c for c in commands if c.robot_id == 1)
+    assert holder_cmd.kick_speed == 0.0
+    assert holder_cmd.vel_angular > 0.0  # +x から +y へは反時計回り
+    assert strategy._state == "POSSESS"
+
+
+def test_holder_shoots_when_near_goal_with_open_lane():
+    strategy = _blue_strategy()
+    # ボール(とホルダー)はゴール(+4.5, 0)まで 1.0 m、敵なし、ゴール正面向き。
+    world = _world(
+        ball_xy=(3.5, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, 3.45, 0.0, 0.0), (2, 2.0, 1.5, 0.0)],
+    )
+
+    commands = strategy.compute_commands(world, referee_running=True)
+
+    holder_cmd = next(c for c in commands if c.robot_id == 1)
+    assert holder_cmd.kick_speed == 4.0
+    # シュートはパスではないので PASS_IN_FLIGHT に入らない
+    assert strategy._state == "POSSESS"
+
+
+def test_holder_prefers_pass_when_shot_lane_is_blocked():
+    strategy = _blue_strategy()
+    # 同じくゴールまで 1.0 m だが、敵がシュートラインを塞ぐ。
+    # 味方(id 2)へのラインは開いている => パスを選ぶ。
+    world = _world(
+        ball_xy=(3.5, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, 3.45, 0.0, 0.0), (2, 2.0, 1.5, 0.0)],
+        yellow=[(0, 4.0, 0.0, 0.0)],
+    )
+
+    commands = strategy.compute_commands(world, referee_running=True)
+
+    holder_cmd = next(c for c in commands if c.robot_id == 1)
+    assert holder_cmd.kick_speed != 4.0  # シュートではない(0 か パス強度)
+    # 蹴れる向きならパス強度、向きが合うまでは 0 — どちらでもシュートでなければよい
+
+
+def test_receiver_intercepts_moving_ball_during_pass_in_flight():
+    strategy = _blue_strategy()
+    strategy._goalkeeper_id = 0
+    strategy._state = "PASS_IN_FLIGHT"
+    strategy._receiver_id = 2
+    strategy._pass_kick_time = 0.0
+    # ボールは原点から +x へ 2 m/s。受け手(id 2)は (1.0, 1.0) にいる =>
+    # インターセプト点 (1.0, 0.0) へ向かう(-y 方向の速度)。
+    world = _world(
+        ball_xy=(0.0, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, -1.0, -2.0, 0.0), (2, 1.0, 1.0, 0.0)],
+        ball_v=(2.0, 0.0),
+        t_capture=0.1,
+    )
+
+    commands = strategy.compute_commands(world, referee_running=True)
+
+    receiver_cmd = next(c for c in commands if c.robot_id == 2)
+    assert receiver_cmd.vel_y < 0.0
+    assert strategy._state == "PASS_IN_FLIGHT"  # まだ飛行中(速いボール、時間内)
+
+
+def test_pass_in_flight_times_out_back_to_chase():
+    strategy = _blue_strategy()
+    strategy._goalkeeper_id = 0
+    strategy._state = "PASS_IN_FLIGHT"
+    strategy._receiver_id = 2
+    strategy._pass_kick_time = 0.0
+    world = _world(
+        ball_xy=(2.0, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, -1.0, -2.0, 0.0), (2, 1.0, 1.0, 0.0)],
+        ball_v=(2.0, 0.0),
+        t_capture=2.1,  # 2.0 s のタイムアウト超過
+    )
+
+    strategy.compute_commands(world, referee_running=True)
+
+    assert strategy._state == "CHASE"
+
+
+def test_pass_in_flight_ends_when_ball_slows_after_min_flight():
+    strategy = _blue_strategy()
+    strategy._goalkeeper_id = 0
+    strategy._state = "PASS_IN_FLIGHT"
+    strategy._receiver_id = 2
+    strategy._pass_kick_time = 0.0
+    world = _world(
+        ball_xy=(2.0, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, -1.0, -2.0, 0.0), (2, 1.0, 1.0, 0.0)],
+        ball_v=(0.1, 0.0),  # 減速済み
+        t_capture=0.5,  # min-flight 0.3 s は経過済み
+    )
+
+    strategy.compute_commands(world, referee_running=True)
+
+    assert strategy._state == "CHASE"
+
+
+def test_pass_in_flight_survives_slow_ball_within_min_flight_window():
+    strategy = _blue_strategy()
+    strategy._goalkeeper_id = 0
+    strategy._state = "PASS_IN_FLIGHT"
+    strategy._receiver_id = 2
+    strategy._pass_kick_time = 0.0
+    # キック直後(0.1 s < 0.3 s)は Vision がまだ遅いボールを報告していても
+    # PASS_IN_FLIGHT を維持する。
+    world = _world(
+        ball_xy=(0.1, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, -1.0, -2.0, 0.0), (2, 1.0, 1.0, 0.0)],
+        ball_v=(0.0, 0.0),
+        t_capture=0.1,
+    )
+
+    strategy.compute_commands(world, referee_running=True)
+
+    assert strategy._state == "PASS_IN_FLIGHT"
+
+
+def test_pass_in_flight_ends_when_receiver_disappears():
+    strategy = _blue_strategy()
+    strategy._goalkeeper_id = 0
+    strategy._state = "PASS_IN_FLIGHT"
+    strategy._receiver_id = 9  # 視界にいない
+    strategy._pass_kick_time = 0.0
+    world = _world(
+        ball_xy=(2.0, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, -1.0, -2.0, 0.0)],
+        ball_v=(2.0, 0.0),
+        t_capture=0.1,
+    )
+
+    strategy.compute_commands(world, referee_running=True)
+
+    assert strategy._state == "CHASE"
+
+
+def test_halt_resets_state_machine_to_chase():
+    strategy = _blue_strategy()
+    strategy._state = "PASS_IN_FLIGHT"
+    strategy._receiver_id = 2
+    strategy._pass_kick_time = 0.0
+    world = _world(ball_xy=(0.0, 0.0), blue=[(0, -4.0, 0.0, 0.0), (2, 0.0, 1.0, 0.0)])
+
+    commands = strategy.compute_commands(world, referee_running=False)
+
+    assert strategy._state == "CHASE"
+    assert strategy._receiver_id is None
+    assert all(c.vel_x == 0.0 and c.vel_y == 0.0 for c in commands)
+
+
+def test_holder_dribbles_toward_goal_when_no_pass_or_shot_available():
+    strategy = _blue_strategy()
+    # 味方はキーパーのみ(パス候補なし)、ゴールまで 4.5 m(シュート不可)
+    # => ドリブル前進: ドリブラー ON、キックなし、+x 方向の速度。
+    world = _world(
+        ball_xy=(0.05, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 0.0)],
+    )
+
+    commands = strategy.compute_commands(world, referee_running=True)
+
+    holder_cmd = next(c for c in commands if c.robot_id == 1)
+    assert holder_cmd.kick_speed == 0.0
+    assert holder_cmd.dribble is True
+    assert holder_cmd.vel_x > 0.0
+
+
+def test_chaser_faces_and_seeks_the_ball_in_chase_state():
+    strategy = _blue_strategy()
+    # ボールは遠い(保持なし)。チェイサー(id 1)はボールと逆(-x)を向いている
+    # => 回転が必要。ボール方向(+x)への移動速度も出る。
+    world = _world(
+        ball_xy=(2.0, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 3.14159)],
+    )
+
+    commands = strategy.compute_commands(world, referee_running=True)
+
+    chaser_cmd = next(c for c in commands if c.robot_id == 1)
+    assert chaser_cmd.vel_x > 0.0
+    assert chaser_cmd.vel_angular != 0.0
+    assert chaser_cmd.kick_speed == 0.0
