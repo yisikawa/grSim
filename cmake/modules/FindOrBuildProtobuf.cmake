@@ -4,8 +4,8 @@ sanitize_env()
 find_package(Protobuf 3.3.0)
 restore_env()
 
-# protobuf versions >= 3.21 are incompatible with how the project is setup and cause weird errors
-# so we build protobuf ourselves
-if(NOT Protobuf_FOUND OR Protobuf_VERSION VERSION_GREATER_EQUAL 3.21)
+# protobuf versions >= 3.22 depend on abseil and require C++14+,
+# which is incompatible with how the project is setup, so we build protobuf ourselves
+if(NOT Protobuf_FOUND OR Protobuf_VERSION VERSION_GREATER_EQUAL 3.22)
   include(BuildProtobuf)
 endif()
