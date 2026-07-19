@@ -12,3 +12,4 @@ cmake-build-release
 .claude/
 docs/superpowers/
 out/
+__pycache__/
