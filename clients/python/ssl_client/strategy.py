@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
 from .commands import RobotCommand
-from .evaluation import choose_action
+from .evaluation import SHOOT_KICK_SPEED_MPS, choose_action
 from .game_state import GameState, Phase
 from .roles import (
     apply_separation,
@@ -24,6 +24,9 @@ PASS_MIN_FLIGHT_S = 0.3  # suppress the slow-ball exit right after the kick
 KICK_RANGE_M = 0.15
 KICK_ANGLE_TOLERANCE = 0.35  # radians (~20 degrees)
 DRIBBLE_ADVANCE_SPEED_MPS = 1.0
+KICKOFF_KICKER_STANDOFF_M = 0.2  # kicker waits this far on our side of the ball
+PENALTY_RETREAT_M = 1.0  # non-kicker robots stay this far behind the ball
+OWN_HALF_MARGIN_M = 0.2  # clamp margin from the halfway line
 
 STATE_CHASE = "CHASE"
 STATE_POSSESS = "POSSESS"
@@ -126,9 +129,18 @@ class TeamStrategy:
         if phase is Phase.RUNNING:
             return self._run_play(world, own_robots, opponents, non_keeper_ids, ball, geometry)
 
-        # Any non-running, non-halt phase: strategy repositions; rules.py
-        # enforces distances/speed on top. Set-piece placement is refined
-        # in a later task; STOP-style formation is the safe default.
+        if phase in (Phase.KICKOFF_OURS, Phase.PENALTY_OURS):
+            return self._set_piece_ours(phase, game_state, world, own_robots,
+                                        non_keeper_ids, ball, geometry)
+        if phase is Phase.KICKOFF_THEIRS:
+            return self._kickoff_theirs(world, own_robots, ball, geometry)
+        if phase is Phase.PENALTY_THEIRS:
+            return self._penalty_theirs(world, own_robots, ball, geometry)
+
+        # Any other non-running, non-halt phase (FREE_KICK_*, BALL_PLACEMENT_*):
+        # strategy repositions; rules.py enforces distances/speed on top.
+        # Set-piece placement for these is refined in a later task;
+        # STOP-style formation is the safe default.
         self._enter_chase()
         return self._stop_commands(world, own_robots, ball, geometry)
 
@@ -200,6 +212,98 @@ class TeamStrategy:
             vx, vy = seek(robot.x, robot.y, target_x, target_y)
             vx, vy = apply_separation(rid, vx, vy, robot, own_robots)
             commands.append(RobotCommand(rid, vx, vy, 0.0, robot.orientation))
+        return commands
+
+    # --- set-piece placement ---------------------------------------------
+
+    def _choose_kicker(self, non_keeper_ids, own_robots, ball):
+        if not non_keeper_ids:
+            return None
+        return min(non_keeper_ids, key=lambda rid: math.hypot(
+            own_robots[rid].x - ball.x, own_robots[rid].y - ball.y))
+
+    def _kicker_command(self, rid, robot, ball, own_robots, may_kick, goal_xy):
+        if may_kick:
+            vx, vy = seek(robot.x, robot.y, ball.x, ball.y)
+        else:
+            forward_sign = -1.0 if self._config.defend_positive_x else 1.0
+            standoff_x = ball.x - forward_sign * KICKOFF_KICKER_STANDOFF_M
+            vx, vy = seek(robot.x, robot.y, standoff_x, ball.y)
+        vx, vy = apply_separation(rid, vx, vy, robot, own_robots)
+        target_orientation = math.atan2(goal_xy[1] - robot.y, goal_xy[0] - robot.x)
+        vel_angular, angle_error = face(robot.orientation, target_orientation)
+        kick = 0.0
+        if may_kick:
+            ball_dist = math.hypot(robot.x - ball.x, robot.y - ball.y)
+            if abs(angle_error) < KICK_ANGLE_TOLERANCE and ball_dist < KICK_RANGE_M:
+                kick = SHOOT_KICK_SPEED_MPS
+        return RobotCommand(rid, vx, vy, vel_angular, robot.orientation,
+                            kick_speed=kick, dribble=may_kick)
+
+    def _set_piece_ours(self, phase, game_state, world, own_robots,
+                        non_keeper_ids, ball, geometry):
+        self._enter_chase()
+        kicker_id = self._choose_kicker(non_keeper_ids, own_robots, ball)
+        if kicker_id is not None:
+            self.rule_exempt_ids = frozenset({kicker_id})
+        goal_x = -own_goal_x(world, self._config.defend_positive_x)
+        goal_xy = (goal_x, 0.0)
+        forward_sign = -1.0 if self._config.defend_positive_x else 1.0
+        commands = []
+        for rid, robot in own_robots.items():
+            if rid == self._goalkeeper_id:
+                commands.append(self._keeper_command(rid, robot, geometry, ball, own_robots))
+            elif rid == kicker_id:
+                commands.append(self._kicker_command(
+                    rid, robot, ball, own_robots, game_state.may_kick, goal_xy))
+            elif phase is Phase.PENALTY_OURS:
+                target_x = ball.x - forward_sign * PENALTY_RETREAT_M
+                vx, vy = seek(robot.x, robot.y, target_x, robot.y)
+                vx, vy = apply_separation(rid, vx, vy, robot, own_robots)
+                commands.append(RobotCommand(rid, vx, vy, 0.0, robot.orientation))
+            else:  # KICKOFF_OURS support robots: formation clamped to own half
+                commands.append(self._own_half_formation_command(
+                    rid, robot, world, ball, own_robots, forward_sign))
+        return commands
+
+    def _own_half_formation_command(self, rid, robot, world, ball, own_robots, forward_sign):
+        slot_index = self._formation_slots[rid]
+        target_x, target_y = formation_target(
+            world, self._config.defend_positive_x, slot_index, ball.x)
+        # own half: x has opposite sign to forward_sign; clamp with margin
+        if forward_sign > 0:
+            target_x = min(target_x, -OWN_HALF_MARGIN_M)
+        else:
+            target_x = max(target_x, OWN_HALF_MARGIN_M)
+        vx, vy = seek(robot.x, robot.y, target_x, target_y)
+        vx, vy = apply_separation(rid, vx, vy, robot, own_robots)
+        return RobotCommand(rid, vx, vy, 0.0, robot.orientation)
+
+    def _kickoff_theirs(self, world, own_robots, ball, geometry):
+        self._enter_chase()
+        forward_sign = -1.0 if self._config.defend_positive_x else 1.0
+        commands = []
+        for rid, robot in own_robots.items():
+            if rid == self._goalkeeper_id:
+                commands.append(self._keeper_command(rid, robot, geometry, ball, own_robots))
+            else:
+                commands.append(self._own_half_formation_command(
+                    rid, robot, world, ball, own_robots, forward_sign))
+        return commands
+
+    def _penalty_theirs(self, world, own_robots, ball, geometry):
+        self._enter_chase()
+        forward_sign = -1.0 if self._config.defend_positive_x else 1.0
+        commands = []
+        for rid, robot in own_robots.items():
+            if rid == self._goalkeeper_id:
+                commands.append(self._keeper_command(rid, robot, geometry, ball, own_robots))
+            else:
+                # stay behind the ball, away from our goal under attack
+                target_x = ball.x + forward_sign * PENALTY_RETREAT_M
+                vx, vy = seek(robot.x, robot.y, target_x, robot.y)
+                vx, vy = apply_separation(rid, vx, vy, robot, own_robots)
+                commands.append(RobotCommand(rid, vx, vy, 0.0, robot.orientation))
         return commands
 
     # --- per-role command builders ---------------------------------------

@@ -541,3 +541,64 @@ def test_stop_phase_keeper_still_tracks_ball():
 
     keeper_cmd = next(c for c in commands if c.robot_id == 0)
     assert keeper_cmd.vel_y > 0
+
+
+# --- KICKOFF_OURS / PENALTY_OURS / KICKOFF_THEIRS / PENALTY_THEIRS ---
+
+
+def _kickoff_world():
+    # yellow team, defend_positive_x=False => own goal at -4.5, own half x<0.
+    # Keeper (0) near own goal; robot 1 is the nearest non-keeper to the
+    # ball at (0,0); robot 2 sits in the opponent half (x>=0) so the
+    # own-half-clamp behavior (KICKOFF_THEIRS) is actually exercised.
+    return _world(
+        ball_xy=(0.0, 0.0),
+        yellow=[(0, -4.4, 0.0, 0.0), (1, -1.0, 0.0, 0.0), (2, 2.0, 0.5, 0.0)],
+    )
+
+
+def test_kickoff_ours_nominates_exactly_one_exempt_kicker():
+    world = _kickoff_world()
+    strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))
+
+    commands = strategy.compute_commands(world, GameState(Phase.KICKOFF_OURS))
+
+    assert len(strategy.rule_exempt_ids) == 1
+    kicker_id = next(iter(strategy.rule_exempt_ids))
+    assert kicker_id != strategy.goalkeeper_id
+    assert commands  # everyone gets a command
+
+
+def test_kickoff_ours_without_normal_start_does_not_kick():
+    world = _kickoff_world()
+    strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))
+
+    commands = strategy.compute_commands(world, GameState(Phase.KICKOFF_OURS, may_kick=False))
+
+    assert all(c.kick_speed == 0.0 for c in commands)
+
+
+def test_kickoff_theirs_keeps_everyone_in_own_half():
+    world = _kickoff_world()
+    strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))
+
+    # own half is x < 0; targets are not directly observable, so verify by
+    # running the tick and checking no command pushes a robot already at
+    # x >= 0 further into the opponent half.
+    for cmd in strategy.compute_commands(world, GameState(Phase.KICKOFF_THEIRS)):
+        robot = world.yellow_robots[cmd.robot_id]
+        if robot.x >= 0.0:
+            assert cmd.vel_x <= 0.0
+
+
+def test_penalty_theirs_places_keeper_on_goal_line():
+    world = _kickoff_world()
+    strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))
+
+    commands = strategy.compute_commands(world, GameState(Phase.PENALTY_THEIRS))
+
+    keeper_cmd = next(c for c in commands if c.robot_id == strategy.goalkeeper_id)
+    keeper = world.yellow_robots[strategy.goalkeeper_id]
+    # keeper is commanded toward own goal line (x = -field_length/2)
+    if keeper.x > -world.geometry.field_length / 2.0 + 0.05:
+        assert keeper_cmd.vel_x < 0.0
