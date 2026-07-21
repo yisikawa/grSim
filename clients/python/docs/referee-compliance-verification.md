@@ -17,4 +17,4 @@ WSL2の2ターミナルで `python3 team_yellow.py` と `python3 team_blue.py` �
 - [ ] **Penalty (Blue) → Normal Start**: 逆側も同様
 - [ ] **Ball Placement (どちらか)**: 全ロボットがボール→指定地点の線分から0.5m以上離れる
 - [ ] **試合を数分間流す**: ディフェンスエリアに攻撃ロボットが進入しない(キーパー以外が自陣エリアに入らない・全ロボットが敵エリアに入らない)
-- [ ] **game-controllerなしで起動**: refereeを止めてもフリープレーで動き続ける
+- [ ] **game-controllerなしで起動**: game-controllerを一度も起動していない状態でクライアントを起動すると、フリープレーで動作する(いったんRefereeメッセージを受信した後は、GCを停止しても最後の状態が維持される)

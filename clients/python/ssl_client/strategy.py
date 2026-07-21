@@ -271,8 +271,11 @@ class TeamStrategy:
             if rid == self._goalkeeper_id:
                 commands.append(self._keeper_command(rid, robot, geometry, ball, own_robots))
             elif rid == kicker_id:
-                commands.append(self._kicker_command(
-                    rid, robot, ball, own_robots, game_state.may_kick, goal_xy))
+                cmd = self._kicker_command(
+                    rid, robot, ball, own_robots, game_state.may_kick, goal_xy)
+                if phase is Phase.KICKOFF_OURS and cmd.kick_speed > 0.0:
+                    self._forbidden_toucher_id = rid
+                commands.append(cmd)
             elif phase is Phase.PENALTY_OURS:
                 target_x = ball.x - forward_sign * PENALTY_RETREAT_M
                 vx, vy = seek(robot.x, robot.y, target_x, robot.y)

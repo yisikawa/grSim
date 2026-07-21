@@ -648,6 +648,62 @@ def test_forbidden_toucher_cleared_when_someone_else_reaches_ball():
     assert strategy._forbidden_toucher_id is None
 
 
+def test_kickoff_ours_records_double_touch_when_kicker_kicks():
+    # Same kicker-on-ball pattern as the free-kick double-touch test: kicker
+    # (id 1) sits 5cm from the ball, already facing the opponent goal (+X
+    # for defend_positive_x=False), so _kicker_command kicks immediately.
+    # SSL's double-touch ban applies to kickoffs too (not just free kicks).
+    world = _world(
+        ball_xy=(0.0, 0.0),
+        yellow=[(0, -4.4, 0.0, 0.0), (1, -0.05, 0.0, 0.0)],
+    )
+    strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))
+
+    commands = strategy.compute_commands(world, GameState(Phase.KICKOFF_OURS, may_kick=True))
+
+    kicker_id = next(iter(strategy.rule_exempt_ids))
+    kicker_cmd = next(c for c in commands if c.robot_id == kicker_id)
+    assert kicker_cmd.kick_speed > 0.0
+    assert strategy._forbidden_toucher_id == kicker_id
+
+
+def test_penalty_ours_does_not_record_double_touch():
+    # Same setup as the kickoff double-touch test above, but the double-touch
+    # ban does not apply to penalties, so no forbidden toucher is recorded
+    # even though the kicker kicks.
+    world = _world(
+        ball_xy=(0.0, 0.0),
+        yellow=[(0, -4.4, 0.0, 0.0), (1, -0.05, 0.0, 0.0)],
+    )
+    strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))
+
+    commands = strategy.compute_commands(world, GameState(Phase.PENALTY_OURS, may_kick=True))
+
+    kicker_id = next(iter(strategy.rule_exempt_ids))
+    kicker_cmd = next(c for c in commands if c.robot_id == kicker_id)
+    assert kicker_cmd.kick_speed > 0.0
+    assert strategy._forbidden_toucher_id is None
+
+
+def test_penalty_ours_places_non_kicker_behind_the_ball():
+    # yellow, defend_positive_x=False => forward_sign=+1, so non-kicker
+    # robots retreat to target_x = ball.x - 1.0. Robot 1 sits at ball.x+0.5,
+    # to the right of the (more negative) target, so it must be commanded
+    # with a negative vel_x. Robot 2 is closer to the ball (dist 0.1 vs 0.5)
+    # so it becomes the exempt kicker instead of a placement robot.
+    world = _world(
+        ball_xy=(0.0, 0.0),
+        yellow=[(0, -4.4, 0.0, 0.0), (1, 0.5, 0.0, 0.0), (2, 0.1, 0.0, 0.0)],
+    )
+    strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))
+
+    commands = strategy.compute_commands(world, GameState(Phase.PENALTY_OURS, may_kick=False))
+
+    assert strategy.rule_exempt_ids == {2}
+    placement_cmd = next(c for c in commands if c.robot_id == 1)
+    assert placement_cmd.vel_x < 0.0
+
+
 def test_penalty_theirs_places_keeper_on_goal_line():
     world = _kickoff_world()
     strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))
