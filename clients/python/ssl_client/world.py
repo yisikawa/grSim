@@ -48,6 +48,8 @@ class FieldGeometry:
     goal_width: float  # meters
     goal_depth: float  # meters
     boundary_width: float  # meters
+    penalty_area_depth: float = 1.0  # meters; Division B default when absent
+    penalty_area_width: float = 2.0  # meters; Division B default when absent
 
 
 @dataclass
@@ -93,10 +95,16 @@ def update_from_detection_frame(world: WorldModel, detection) -> None:
 
 def update_from_geometry_data(world: WorldModel, geometry) -> None:
     f = geometry.field
+    kwargs = {}
+    if f.HasField("penalty_area_depth"):
+        kwargs["penalty_area_depth"] = f.penalty_area_depth * _MM_TO_M
+    if f.HasField("penalty_area_width"):
+        kwargs["penalty_area_width"] = f.penalty_area_width * _MM_TO_M
     world.geometry = FieldGeometry(
         field_length=f.field_length * _MM_TO_M,
         field_width=f.field_width * _MM_TO_M,
         goal_width=f.goal_width * _MM_TO_M,
         goal_depth=f.goal_depth * _MM_TO_M,
         boundary_width=f.boundary_width * _MM_TO_M,
+        **kwargs,
     )

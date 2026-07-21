@@ -130,3 +130,43 @@ def test_estimate_ball_velocity_none_prev_returns_zero():
     from ssl_client.world import estimate_ball_velocity
 
     assert estimate_ball_velocity(None, 1.0, 2.0, 0.0) == (0.0, 0.0)
+
+
+class _FakeFieldWithPenalty:
+    def __init__(self):
+        self.field_length = 12000
+        self.field_width = 9000
+        self.goal_width = 1800
+        self.goal_depth = 180
+        self.boundary_width = 300
+        self._has_penalty = True
+        self.penalty_area_depth = 1800
+        self.penalty_area_width = 3600
+
+    def HasField(self, name):
+        return self._has_penalty
+
+
+class _FakeGeometryPacket:
+    def __init__(self, field):
+        self.field = field
+
+
+def test_geometry_uses_penalty_area_from_packet():
+    from ssl_client.world import WorldModel, update_from_geometry_data
+
+    world = WorldModel()
+    update_from_geometry_data(world, _FakeGeometryPacket(_FakeFieldWithPenalty()))
+    assert world.geometry.penalty_area_depth == 1.8
+    assert world.geometry.penalty_area_width == 3.6
+
+
+def test_geometry_falls_back_to_division_b_defaults():
+    from ssl_client.world import WorldModel, update_from_geometry_data
+
+    field = _FakeFieldWithPenalty()
+    field._has_penalty = False
+    world = WorldModel()
+    update_from_geometry_data(world, _FakeGeometryPacket(field))
+    assert world.geometry.penalty_area_depth == 1.0
+    assert world.geometry.penalty_area_width == 2.0
