@@ -591,6 +591,63 @@ def test_kickoff_theirs_keeps_everyone_in_own_half():
             assert cmd.vel_x <= 0.0
 
 
+def test_free_kick_ours_has_exempt_kicker_and_records_double_touch():
+    # Kicker (id 1) sits 5cm from the ball, already facing the opponent goal
+    # (+X for defend_positive_x=False), so _kicker_command kicks immediately.
+    world = _world(
+        ball_xy=(0.0, 0.0),
+        yellow=[(0, -4.4, 0.0, 0.0), (1, -0.05, 0.0, 0.0)],
+    )
+    strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))
+
+    commands = strategy.compute_commands(world, GameState(Phase.FREE_KICK_OURS, may_kick=True))
+
+    kicker_id = next(iter(strategy.rule_exempt_ids))
+    kicker_cmd = next(c for c in commands if c.robot_id == kicker_id)
+    assert kicker_cmd.kick_speed > 0.0
+    assert strategy._forbidden_toucher_id == kicker_id
+
+
+def test_forbidden_toucher_excluded_from_chase():
+    world = _world(
+        ball_xy=(2.0, 0.0),
+        yellow=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 0.0), (2, 1.9, 0.0, 0.0)],
+    )
+    strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))
+    running = GameState(Phase.RUNNING, may_kick=True)
+    strategy.compute_commands(world, running)  # establishes goalkeeper_id
+
+    # The nearest non-keeper to the ball would normally be the chaser; ban it.
+    nearest = min(
+        (rid for rid in world.yellow_robots if rid != strategy.goalkeeper_id),
+        key=lambda rid: math.hypot(world.yellow_robots[rid].x - world.ball.x,
+                                   world.yellow_robots[rid].y - world.ball.y),
+    )
+    strategy._forbidden_toucher_id = nearest
+
+    commands = strategy.compute_commands(world, running)
+
+    # The banned robot must not get chaser/holder behavior (dribble=True);
+    # it should fall through to a support command instead.
+    forbidden_cmd = next(c for c in commands if c.robot_id == nearest)
+    assert not forbidden_cmd.dribble
+
+
+def test_forbidden_toucher_cleared_when_someone_else_reaches_ball():
+    # An opponent robot is within POSSESSION_DIST_M of the ball.
+    world = _world(
+        ball_xy=(0.0, 0.0),
+        yellow=[(0, -4.4, 0.0, 0.0), (1, -1.0, 0.0, 0.0)],
+        blue=[(0, 0.05, 0.0, 0.0)],
+    )
+    strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))
+    strategy._forbidden_toucher_id = 1
+
+    strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
+
+    assert strategy._forbidden_toucher_id is None
+
+
 def test_penalty_theirs_places_keeper_on_goal_line():
     world = _kickoff_world()
     strategy = TeamStrategy(TeamConfig(is_team_yellow=True, defend_positive_x=False))

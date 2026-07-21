@@ -60,6 +60,7 @@ class TeamStrategy:
         # the end of the tick so every robot sees the pre-kick state this tick.
         self._pending_pass: Optional[Tuple[int, float]] = None
         self.rule_exempt_ids: frozenset = frozenset()
+        self._forbidden_toucher_id: Optional[int] = None
 
     # --- state machine -------------------------------------------------
 
@@ -136,8 +137,11 @@ class TeamStrategy:
             return self._kickoff_theirs(world, own_robots, ball, geometry)
         if phase is Phase.PENALTY_THEIRS:
             return self._penalty_theirs(world, own_robots, ball, geometry)
+        if phase is Phase.FREE_KICK_OURS:
+            return self._free_kick_ours(game_state, world, own_robots, opponents,
+                                        non_keeper_ids, ball, geometry)
 
-        # Any other non-running, non-halt phase (FREE_KICK_*, BALL_PLACEMENT_*):
+        # Any other non-running, non-halt phase (FREE_KICK_THEIRS, BALL_PLACEMENT_*):
         # strategy repositions; rules.py enforces distances/speed on top.
         # Set-piece placement for these is refined in a later task;
         # STOP-style formation is the safe default.
@@ -145,8 +149,21 @@ class TeamStrategy:
         return self._stop_commands(world, own_robots, ball, geometry)
 
     def _run_play(self, world, own_robots, opponents, non_keeper_ids, ball, geometry):
+        if self._forbidden_toucher_id is not None:
+            others_near_ball = any(
+                math.hypot(r.x - ball.x, r.y - ball.y) < POSSESSION_DIST_M
+                for rid, r in own_robots.items() if rid != self._forbidden_toucher_id
+            ) or any(
+                math.hypot(o.x - ball.x, o.y - ball.y) < POSSESSION_DIST_M
+                for o in opponents
+            )
+            if others_near_ball:
+                self._forbidden_toucher_id = None
+
+        eligible_ids = [rid for rid in non_keeper_ids if rid != self._forbidden_toucher_id]
+
         holder_id = None
-        holders = [rid for rid in non_keeper_ids if _holds_ball(own_robots[rid], ball)]
+        holders = [rid for rid in eligible_ids if _holds_ball(own_robots[rid], ball)]
         if holders:
             holder_id = min(
                 holders,
@@ -158,9 +175,9 @@ class TeamStrategy:
         self._update_state(own_robots, ball, holder_id)
 
         chaser_id = None
-        if self._state == STATE_CHASE and non_keeper_ids:
+        if self._state == STATE_CHASE and eligible_ids:
             chaser_id = min(
-                non_keeper_ids,
+                eligible_ids,
                 key=lambda rid: math.hypot(
                     own_robots[rid].x - ball.x, own_robots[rid].y - ball.y
                 ),
@@ -264,6 +281,30 @@ class TeamStrategy:
             else:  # KICKOFF_OURS support robots: formation clamped to own half
                 commands.append(self._own_half_formation_command(
                     rid, robot, world, ball, own_robots, forward_sign))
+        return commands
+
+    def _free_kick_ours(self, game_state, world, own_robots, opponents,
+                        non_keeper_ids, ball, geometry):
+        self._enter_chase()
+        kicker_id = self._choose_kicker(non_keeper_ids, own_robots, ball)
+        if kicker_id is not None:
+            self.rule_exempt_ids = frozenset({kicker_id})
+        goal_x = -own_goal_x(world, self._config.defend_positive_x)
+        goal_xy = (goal_x, 0.0)
+        forward_sign = -1.0 if self._config.defend_positive_x else 1.0
+        commands = []
+        for rid, robot in own_robots.items():
+            if rid == self._goalkeeper_id:
+                commands.append(self._keeper_command(rid, robot, geometry, ball, own_robots))
+            elif rid == kicker_id:
+                cmd = self._kicker_command(rid, robot, ball, own_robots,
+                                           game_state.may_kick, goal_xy)
+                if cmd.kick_speed > 0.0:
+                    self._forbidden_toucher_id = rid
+                commands.append(cmd)
+            else:
+                commands.append(self._support_command(
+                    rid, robot, world, ball, own_robots, opponents, forward_sign))
         return commands
 
     def _own_half_formation_command(self, rid, robot, world, ball, own_robots, forward_sign):
