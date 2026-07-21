@@ -4,6 +4,7 @@ from typing import Dict, Optional, Tuple
 
 from .commands import RobotCommand
 from .evaluation import choose_action
+from .game_state import GameState, Phase
 from .roles import (
     apply_separation,
     face,
@@ -55,6 +56,7 @@ class TeamStrategy:
         # (receiver_id, kick_time) recorded by the holder mid-loop; applied at
         # the end of the tick so every robot sees the pre-kick state this tick.
         self._pending_pass: Optional[Tuple[int, float]] = None
+        self.rule_exempt_ids: frozenset = frozenset()
 
     # --- state machine -------------------------------------------------
 
@@ -85,7 +87,11 @@ class TeamStrategy:
 
     # --- main entry -----------------------------------------------------
 
-    def compute_commands(self, world: WorldModel, referee_running: bool):
+    @property
+    def goalkeeper_id(self) -> Optional[int]:
+        return self._goalkeeper_id
+
+    def compute_commands(self, world: WorldModel, game_state: GameState):
         # Snapshot: the Vision receiver runs on its own thread and mutates
         # world.*_robots concurrently with this method's iteration.
         if self._config.is_team_yellow:
@@ -97,7 +103,10 @@ class TeamStrategy:
         if not own_robots or world.ball is None or world.geometry is None:
             return []
 
-        if not referee_running:
+        self.rule_exempt_ids = frozenset()
+        phase = game_state.phase
+
+        if phase is Phase.HALT:
             self._enter_chase()
             return [
                 RobotCommand(rid, 0.0, 0.0, 0.0, robot.orientation)
@@ -113,6 +122,17 @@ class TeamStrategy:
 
         ball = world.ball
         geometry = world.geometry
+
+        if phase is Phase.RUNNING:
+            return self._run_play(world, own_robots, opponents, non_keeper_ids, ball, geometry)
+
+        # Any non-running, non-halt phase: strategy repositions; rules.py
+        # enforces distances/speed on top. Set-piece placement is refined
+        # in a later task; STOP-style formation is the safe default.
+        self._enter_chase()
+        return self._stop_commands(world, own_robots, ball, geometry)
+
+    def _run_play(self, world, own_robots, opponents, non_keeper_ids, ball, geometry):
         holder_id = None
         holders = [rid for rid in non_keeper_ids if _holds_ball(own_robots[rid], ball)]
         if holders:
@@ -165,6 +185,21 @@ class TeamStrategy:
             self._receiver_id, self._pass_kick_time = self._pending_pass
             self._state = STATE_PASS_IN_FLIGHT
             self._pending_pass = None
+        return commands
+
+    def _stop_commands(self, world, own_robots, ball, geometry):
+        commands = []
+        for rid, robot in own_robots.items():
+            if rid == self._goalkeeper_id:
+                commands.append(self._keeper_command(rid, robot, geometry, ball, own_robots))
+                continue
+            slot_index = self._formation_slots[rid]
+            target_x, target_y = formation_target(
+                world, self._config.defend_positive_x, slot_index, ball.x
+            )
+            vx, vy = seek(robot.x, robot.y, target_x, target_y)
+            vx, vy = apply_separation(rid, vx, vy, robot, own_robots)
+            commands.append(RobotCommand(rid, vx, vy, 0.0, robot.orientation))
         return commands
 
     # --- per-role command builders ---------------------------------------

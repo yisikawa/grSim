@@ -1,5 +1,6 @@
 import math
 
+from ssl_client.game_state import GameState, Phase
 from ssl_client.strategy import TeamConfig, TeamStrategy
 from ssl_client.world import BallObservation, FieldGeometry, RobotObservation, WorldModel
 
@@ -26,7 +27,7 @@ def test_returns_no_commands_before_ball_or_geometry_is_known():
     empty_world = WorldModel()
     empty_world.blue_robots[0] = RobotObservation(0, 0.0, 0.0, 0.0, 0.0)
 
-    assert strategy.compute_commands(empty_world, referee_running=True) == []
+    assert strategy.compute_commands(empty_world, GameState(Phase.RUNNING, may_kick=True)) == []
 
 
 def test_halted_state_returns_zero_velocity_for_every_own_robot():
@@ -34,7 +35,7 @@ def test_halted_state_returns_zero_velocity_for_every_own_robot():
     strategy = TeamStrategy(config)
     world = _world(ball_xy=(0.0, 0.0), blue=[(0, -4.0, 0.0, 0.0), (1, 0.0, 0.0, 0.0)])
 
-    commands = strategy.compute_commands(world, referee_running=False)
+    commands = strategy.compute_commands(world, GameState(Phase.HALT))
 
     assert len(commands) == 2
     for cmd in commands:
@@ -52,7 +53,7 @@ def test_lowest_id_robot_is_permanently_the_goalkeeper():
         blue=[(5, -4.0, 0.0, 0.0), (2, -3.5, 0.0, 0.0), (9, 0.0, 0.0, 0.0)],
     )
 
-    strategy.compute_commands(world, referee_running=True)
+    strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     assert strategy._goalkeeper_id == 2
 
@@ -66,7 +67,7 @@ def test_attacker_is_nearest_non_keeper_robot_to_the_ball():
         blue=[(0, -4.4, 0.0, 0.0), (1, -3.0, 2.0, 0.0), (2, 0.9, 0.0, 0.0)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     by_id = {c.robot_id: c for c in commands}
     # The attacker (robot 2) should be driving toward the ball: positive vel_x.
@@ -87,7 +88,7 @@ def test_attacker_rotates_to_face_the_opponent_goal():
         blue=[(0, -4.4, 0.0, 0.0), (1, 0.9, 0.0, 1.5707963267948966)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     attacker_cmd = next(c for c in commands if c.robot_id == 1)
     # Facing +Y and needing to face +X (toward the opponent goal) means
@@ -106,7 +107,7 @@ def test_attacker_kicks_when_close_to_ball_and_facing_the_opponent_goal():
         blue=[(0, -4.4, 0.0, 0.0), (1, 4.0, 0.0, 0.0)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     attacker_cmd = next(c for c in commands if c.robot_id == 1)
     assert attacker_cmd.kick_speed > 0.0
@@ -122,7 +123,7 @@ def test_attacker_does_not_kick_when_close_but_not_facing_the_opponent_goal():
         blue=[(0, -4.4, 0.0, 0.0), (1, 4.0, 0.0, 1.5707963267948966)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     attacker_cmd = next(c for c in commands if c.robot_id == 1)
     assert attacker_cmd.kick_speed == 0.0
@@ -143,7 +144,7 @@ def test_formation_robot_shifts_forward_when_ball_is_in_attacking_half():
         blue=[(0, -4.4, 0.0, 0.0), (1, -3.5, 0.0, 0.0), (2, 3.99, 0.0, 0.0)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     formation_cmd = next(c for c in commands if c.robot_id == 1)
     assert formation_cmd.vel_x > 0
@@ -157,7 +158,7 @@ def test_goalkeeper_targets_own_goal_line_and_tracks_ball_y_within_goal_width():
     # not all the way to the ball's y=2.0.
     world = _world(ball_xy=(0.0, 2.0), blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 0.0)])
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     keeper_cmd = next(c for c in commands if c.robot_id == 0)
     assert keeper_cmd.vel_y > 0  # moves toward positive y, following the ball
@@ -212,7 +213,7 @@ def test_state_is_chase_when_nobody_holds_the_ball():
     strategy = _blue_strategy()
     world = _world(ball_xy=(2.0, 0.0), blue=[(0, -4.4, 0.0, 0.0), (1, -1.0, 0.0, 0.0)])
 
-    strategy.compute_commands(world, referee_running=True)
+    strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     assert strategy._state == "CHASE"
 
@@ -221,7 +222,7 @@ def test_state_becomes_possess_when_a_robot_holds_a_slow_ball():
     strategy = _blue_strategy()
     world = _world(ball_xy=(1.0, 0.0), blue=[(0, -4.4, 0.0, 0.0), (1, 0.95, 0.0, 0.0)])
 
-    strategy.compute_commands(world, referee_running=True)
+    strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     assert strategy._state == "POSSESS"
 
@@ -234,7 +235,7 @@ def test_fast_ball_nearby_does_not_count_as_possession():
         ball_v=(1.5, 0.0),
     )
 
-    strategy.compute_commands(world, referee_running=True)
+    strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     assert strategy._state == "CHASE"
 
@@ -249,7 +250,7 @@ def test_holder_kicks_a_pass_toward_open_mate_and_enters_pass_in_flight():
         blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 1.5707963267948966), (2, 0.0, 2.0, 0.0)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     holder_cmd = next(c for c in commands if c.robot_id == 1)
     assert 1.5 <= holder_cmd.kick_speed <= 3.5  # パス強度(シュートの 4.0 ではない)
@@ -269,7 +270,7 @@ def test_receiver_plays_support_on_the_kick_tick_itself():
         blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 1.5707963267948966), (2, 0.0, 2.0, 0.0)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     assert strategy._state == "PASS_IN_FLIGHT"  # visible after the tick
     receiver_cmd = next(c for c in commands if c.robot_id == 2)
@@ -285,7 +286,7 @@ def test_holder_does_not_kick_before_facing_the_pass_target():
         blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 0.0), (2, 0.0, 2.0, 0.0)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     holder_cmd = next(c for c in commands if c.robot_id == 1)
     assert holder_cmd.kick_speed == 0.0
@@ -301,7 +302,7 @@ def test_holder_shoots_when_near_goal_with_open_lane():
         blue=[(0, -4.4, 0.0, 0.0), (1, 3.45, 0.0, 0.0), (2, 2.0, 1.5, 0.0)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     holder_cmd = next(c for c in commands if c.robot_id == 1)
     assert holder_cmd.kick_speed == 4.0
@@ -323,7 +324,7 @@ def test_holder_prefers_pass_when_shot_lane_is_blocked():
         yellow=[(0, 4.0, 0.0, 0.0)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     holder_cmd = next(c for c in commands if c.robot_id == 1)
     assert holder_cmd.kick_speed != 4.0  # シュートではない
@@ -347,7 +348,7 @@ def test_receiver_intercepts_moving_ball_during_pass_in_flight():
         t_capture=0.1,
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     receiver_cmd = next(c for c in commands if c.robot_id == 2)
     assert receiver_cmd.vel_y < 0.0
@@ -367,7 +368,7 @@ def test_pass_in_flight_times_out_back_to_chase():
         t_capture=2.1,  # 2.0 s のタイムアウト超過
     )
 
-    strategy.compute_commands(world, referee_running=True)
+    strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     assert strategy._state == "CHASE"
 
@@ -385,7 +386,7 @@ def test_pass_in_flight_ends_when_ball_slows_after_min_flight():
         t_capture=0.5,  # min-flight 0.3 s は経過済み
     )
 
-    strategy.compute_commands(world, referee_running=True)
+    strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     assert strategy._state == "CHASE"
 
@@ -405,7 +406,7 @@ def test_pass_in_flight_survives_slow_ball_within_min_flight_window():
         t_capture=0.1,
     )
 
-    strategy.compute_commands(world, referee_running=True)
+    strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     assert strategy._state == "PASS_IN_FLIGHT"
 
@@ -423,7 +424,7 @@ def test_pass_in_flight_ends_when_receiver_disappears():
         t_capture=0.1,
     )
 
-    strategy.compute_commands(world, referee_running=True)
+    strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     assert strategy._state == "CHASE"
 
@@ -435,7 +436,7 @@ def test_halt_resets_state_machine_to_chase():
     strategy._pass_kick_time = 0.0
     world = _world(ball_xy=(0.0, 0.0), blue=[(0, -4.0, 0.0, 0.0), (2, 0.0, 1.0, 0.0)])
 
-    commands = strategy.compute_commands(world, referee_running=False)
+    commands = strategy.compute_commands(world, GameState(Phase.HALT))
 
     assert strategy._state == "CHASE"
     assert strategy._receiver_id is None
@@ -451,7 +452,7 @@ def test_holder_dribbles_toward_goal_when_no_pass_or_shot_available():
         blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 0.0)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     holder_cmd = next(c for c in commands if c.robot_id == 1)
     assert holder_cmd.kick_speed == 0.0
@@ -468,9 +469,75 @@ def test_chaser_faces_and_seeks_the_ball_in_chase_state():
         blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 3.14159)],
     )
 
-    commands = strategy.compute_commands(world, referee_running=True)
+    commands = strategy.compute_commands(world, GameState(Phase.RUNNING, may_kick=True))
 
     chaser_cmd = next(c for c in commands if c.robot_id == 1)
     assert chaser_cmd.vel_x > 0.0
     assert chaser_cmd.vel_angular != 0.0
     assert chaser_cmd.kick_speed == 0.0
+
+
+# --- GameState dispatch (HALT / STOP / RUNNING) ---
+
+
+def _running():
+    return GameState(Phase.RUNNING, may_kick=True)
+
+
+def test_stop_phase_moves_to_formation_without_kicks():
+    strategy = _blue_strategy()
+    world = _world(
+        ball_xy=(1.0, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, -3.0, 2.0, 0.0), (2, 0.9, 0.0, 0.0)],
+    )
+
+    commands = strategy.compute_commands(world, GameState(Phase.STOP))
+
+    assert commands  # robots still reposition during STOP
+    assert all(c.kick_speed == 0.0 and not c.dribble for c in commands)
+
+
+def test_halt_phase_sends_zero_velocities():
+    strategy = _blue_strategy()
+    world = _world(
+        ball_xy=(1.0, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, -3.0, 2.0, 0.0), (2, 0.9, 0.0, 0.0)],
+    )
+
+    commands = strategy.compute_commands(world, GameState(Phase.HALT))
+
+    assert all(c.vel_x == 0.0 and c.vel_y == 0.0 for c in commands)
+
+
+def test_rule_exempt_ids_is_empty_in_running():
+    strategy = _blue_strategy()
+    world = _world(
+        ball_xy=(1.0, 0.0),
+        blue=[(0, -4.4, 0.0, 0.0), (1, -3.0, 2.0, 0.0), (2, 0.9, 0.0, 0.0)],
+    )
+
+    strategy.compute_commands(world, _running())
+
+    assert strategy.rule_exempt_ids == frozenset()
+
+
+def test_goalkeeper_id_property_matches_lowest_id_robot():
+    strategy = _blue_strategy()
+    world = _world(
+        ball_xy=(0.0, 0.0),
+        blue=[(5, -4.0, 0.0, 0.0), (2, -3.5, 0.0, 0.0), (9, 0.0, 0.0, 0.0)],
+    )
+
+    strategy.compute_commands(world, _running())
+
+    assert strategy.goalkeeper_id == 2
+
+
+def test_stop_phase_keeper_still_tracks_ball():
+    strategy = _blue_strategy()
+    world = _world(ball_xy=(0.0, 2.0), blue=[(0, -4.4, 0.0, 0.0), (1, 0.0, 0.0, 0.0)])
+
+    commands = strategy.compute_commands(world, GameState(Phase.STOP))
+
+    keeper_cmd = next(c for c in commands if c.robot_id == 0)
+    assert keeper_cmd.vel_y > 0
