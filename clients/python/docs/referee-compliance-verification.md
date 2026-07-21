@@ -2,7 +2,8 @@
 
 前提: grSim起動済み(Vision 224.5.23.2:10020 / Command 20011)、
 ssl-game-controller起動済み(Referee 224.5.23.1:10003, Web UI http://localhost:8081)。
-WSL2の2ターミナルで `python3 team_yellow.py` と `python3 team_blue.py --defend-negative-x` を起動。
+WSL2の2ターミナルで `python3 team_yellow.py` と `python3 team_blue.py` を起動
+(デフォルトで互いに反対側のゴールを守備する。yellow=+X側、blue=-X側)。
 
 各項目をWeb UIから操作し、grSim画面で目視確認する:
 
