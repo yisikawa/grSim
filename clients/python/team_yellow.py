@@ -5,7 +5,9 @@ import time
 
 import ssl_client  # noqa: F401  (runs the pb/ sys.path + env var bootstrap)
 from ssl_client.commands import CommandSender
+from ssl_client.game_state import GameStateTracker
 from ssl_client.referee import RefereeReceiver
+from ssl_client.rules import apply_rule_constraints
 from ssl_client.strategy import TeamConfig, TeamStrategy
 from ssl_client.vision import VisionReceiver
 from ssl_client.world import WorldModel
@@ -38,6 +40,8 @@ def main():
         TeamConfig(is_team_yellow=TEAM_IS_YELLOW, defend_positive_x=not args.defend_negative_x)
     )
 
+    tracker = GameStateTracker(is_team_yellow=TEAM_IS_YELLOW)
+
     threading.Thread(target=vision.run_forever, daemon=True).start()
     threading.Thread(target=referee.run_forever, daemon=True).start()
 
@@ -45,8 +49,19 @@ def main():
     print(f"[{TEAM_NAME}] sending commands to {args.grsim_host}:{args.grsim_port}", flush=True)
     try:
         while True:
-            commands = strategy.compute_commands(world, referee.is_running())
-            if commands:
+            game_state = tracker.update(referee.latest, world.ball)
+            commands = strategy.compute_commands(world, game_state)
+            if commands and world.geometry is not None:
+                own = world.yellow_robots if TEAM_IS_YELLOW else world.blue_robots
+                commands = apply_rule_constraints(
+                    commands, game_state,
+                    own_robots=dict(own),
+                    ball=world.ball,
+                    geometry=world.geometry,
+                    defend_positive_x=not args.defend_negative_x,
+                    keeper_id=strategy.goalkeeper_id,
+                    exempt_ids=strategy.rule_exempt_ids,
+                )
                 sender.send(TEAM_IS_YELLOW, commands)
             time.sleep(period)
     except KeyboardInterrupt:
