@@ -83,3 +83,24 @@ def test_running_passes_commands_through():
     ball = BallObservation(x=0.0, y=0.0, t_capture=0.0)
     out = _apply([_cmd(1, -1.0, 0.0, kick=4.0)], GameState(Phase.RUNNING, may_kick=True), robots, ball)
     assert out[0].vel_x == -1.0 and out[0].kick_speed == 4.0
+
+
+def test_untracked_robot_is_still_zeroed_on_halt():
+    # robot_id 9 is not in own_robots (e.g. vision dropout); HALT must still
+    # zero it out rather than passing the raw command through.
+    out = _apply([_cmd(9, 2.0, 2.0, kick=4.0)], GameState(Phase.HALT), {}, None)
+    assert (out[0].vel_x, out[0].vel_y, out[0].kick_speed) == (0.0, 0.0, 0.0)
+
+
+def test_untracked_robot_cannot_kick_during_set_piece():
+    ball = BallObservation(x=0.0, y=0.0, t_capture=0.0)
+    state = GameState(Phase.FREE_KICK_OURS, may_kick=True)
+    out = _apply([_cmd(9, 0.5, 0.0, kick=4.0)], state, {}, ball)
+    assert out[0].kick_speed == 0.0
+
+
+def test_untracked_robot_speed_is_capped_during_stop():
+    # Speed capping only needs velocity, not position, so it should still
+    # apply to a robot missing from own_robots.
+    out = _apply([_cmd(9, 3.0, 0.0)], GameState(Phase.STOP), {}, None)
+    assert math.hypot(out[0].vel_x, out[0].vel_y) <= STOP_SPEED_CAP_MPS + 1e-9

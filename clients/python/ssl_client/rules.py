@@ -5,10 +5,11 @@ filter force-corrects whatever still violates the rules, so a strategy
 bug degrades into conservative motion instead of a foul.
 """
 import math
-from typing import Optional
+from typing import Dict, List, Optional
 
 from .commands import RobotCommand
 from .game_state import GameState, Phase
+from .world import BallObservation, FieldGeometry, RobotObservation
 
 STOP_SPEED_CAP_MPS = 1.5
 BALL_KEEP_OUT_M = 0.5
@@ -56,23 +57,25 @@ def _away_velocity(from_x, from_y, robot_x, robot_y):
 
 
 def apply_rule_constraints(
-    commands,
+    commands: List[RobotCommand],
     game_state: GameState,
     *,
-    own_robots,
-    ball,
-    geometry,
+    own_robots: Dict[int, RobotObservation],
+    ball: Optional[BallObservation],
+    geometry: FieldGeometry,
     defend_positive_x: bool,
     keeper_id: Optional[int],
     exempt_ids: frozenset = frozenset(),
-):
+) -> List[RobotCommand]:
     phase = game_state.phase
     out = []
     for cmd in commands:
+        # A robot missing from own_robots (e.g. vision dropout) still gets
+        # every phase-based constraint that doesn't require a position
+        # (HALT zeroing, kick suppression, speed cap); only position-based
+        # constraints (ball keep-out, and Task 5's area checks) are skipped
+        # for it since there is no position to test.
         robot = own_robots.get(cmd.robot_id)
-        if robot is None:
-            out.append(cmd)
-            continue
         vx, vy = cmd.vel_x, cmd.vel_y
         vel_angular = cmd.vel_angular
         kick, chip, dribble = cmd.kick_speed, cmd.chip_speed, cmd.dribble
@@ -83,7 +86,12 @@ def apply_rule_constraints(
             kick = chip = 0.0
             dribble = False
         else:
-            if ball is not None and phase in _BALL_KEEP_OUT_PHASES and not exempt:
+            if (
+                robot is not None
+                and ball is not None
+                and phase in _BALL_KEEP_OUT_PHASES
+                and not exempt
+            ):
                 if phase in _PLACEMENT_PHASES and game_state.designated_position is not None:
                     nx, ny = _nearest_point_on_segment(
                         robot.x, robot.y, ball.x, ball.y,
