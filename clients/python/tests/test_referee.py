@@ -1,6 +1,6 @@
 from state import ssl_gc_referee_message_pb2 as referee_pb2
 
-from ssl_client.referee import RefereeReceiver, is_match_running, parse_referee_packet
+from ssl_client.referee import RefereeReceiver, parse_referee_packet
 
 
 def _make_referee(command):
@@ -21,16 +21,6 @@ def _make_referee(command):
     return msg
 
 
-def test_is_match_running_false_during_halt_and_stop():
-    assert is_match_running(_make_referee(referee_pb2.Referee.HALT)) is False
-    assert is_match_running(_make_referee(referee_pb2.Referee.STOP)) is False
-
-
-def test_is_match_running_true_during_normal_start_and_force_start():
-    assert is_match_running(_make_referee(referee_pb2.Referee.NORMAL_START)) is True
-    assert is_match_running(_make_referee(referee_pb2.Referee.FORCE_START)) is True
-
-
 def test_parse_referee_packet_round_trips():
     data = _make_referee(referee_pb2.Referee.FORCE_START).SerializeToString()
 
@@ -39,15 +29,18 @@ def test_parse_referee_packet_round_trips():
     assert parsed.command == referee_pb2.Referee.FORCE_START
 
 
-def test_referee_receiver_defaults_to_running_before_any_packet_seen():
+def test_receiver_starts_with_no_message():
     receiver = RefereeReceiver()
-    assert receiver.is_running() is True
+    assert receiver.latest is None
 
 
-def test_referee_receiver_reflects_latest_packet():
+def test_handle_packet_updates_latest():
+    msg = _make_referee(referee_pb2.Referee.STOP)
+    msg.command_counter = 7
+    raw = msg.SerializeToString()
+
     receiver = RefereeReceiver()
-    receiver.handle_packet(_make_referee(referee_pb2.Referee.HALT).SerializeToString())
-    assert receiver.is_running() is False
+    receiver.handle_packet(raw)
 
-    receiver.handle_packet(_make_referee(referee_pb2.Referee.FORCE_START).SerializeToString())
-    assert receiver.is_running() is True
+    assert receiver.latest.command == referee_pb2.Referee.STOP
+    assert receiver.latest.command_counter == 7
