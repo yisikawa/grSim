@@ -104,3 +104,33 @@ def test_untracked_robot_speed_is_capped_during_stop():
     # apply to a robot missing from own_robots.
     out = _apply([_cmd(9, 3.0, 0.0)], GameState(Phase.STOP), {}, None)
     assert math.hypot(out[0].vel_x, out[0].vel_y) <= STOP_SPEED_CAP_MPS + 1e-9
+
+
+def test_non_keeper_is_pushed_out_of_own_defense_area():
+    # defend_positive_x=False -> own goal at x=-4.5; own area x in [-4.5, -3.5], y in [-1, 1]
+    robots = {1: _robot(1, -4.0, 0.0)}
+    out = _apply([_cmd(1, -1.0, 0.0)], GameState(Phase.RUNNING, may_kick=True), robots,
+                 BallObservation(x=2.0, y=2.0, t_capture=0.0))
+    assert out[0].vel_x > 0  # pushed toward field center (+x)
+
+
+def test_keeper_may_stay_in_own_defense_area():
+    robots = {0: _robot(0, -4.0, 0.0)}  # keeper_id=0 in _apply
+    out = _apply([_cmd(0, -0.5, 0.0)], GameState(Phase.RUNNING, may_kick=True), robots,
+                 BallObservation(x=2.0, y=2.0, t_capture=0.0))
+    assert out[0].vel_x == -0.5  # untouched
+
+
+def test_everyone_is_pushed_out_of_opponent_defense_area():
+    # opponent area: x in [3.5, 4.5], y in [-1, 1]
+    robots = {0: _robot(0, 4.0, 0.0)}
+    out = _apply([_cmd(0, 1.0, 0.0)], GameState(Phase.RUNNING, may_kick=True), robots,
+                 BallObservation(x=2.0, y=2.0, t_capture=0.0))
+    assert out[0].vel_x < 0  # keeper exemption does NOT apply to opponent area
+
+
+def test_robot_outside_field_is_sent_back():
+    robots = {1: _robot(1, 5.0, 0.0)}  # beyond +x field edge (4.5)
+    out = _apply([_cmd(1, 1.0, 0.0)], GameState(Phase.RUNNING, may_kick=True), robots,
+                 BallObservation(x=0.0, y=0.0, t_capture=0.0))
+    assert out[0].vel_x < 0

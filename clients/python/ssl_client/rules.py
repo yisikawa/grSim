@@ -56,6 +56,53 @@ def _away_velocity(from_x, from_y, robot_x, robot_y):
     return dx / dist * RETREAT_SPEED_MPS, dy / dist * RETREAT_SPEED_MPS
 
 
+def _defense_area_bounds(geometry, positive_x: bool):
+    half_len = geometry.field_length / 2.0
+    half_w = geometry.penalty_area_width / 2.0
+    if positive_x:
+        return half_len - geometry.penalty_area_depth, half_len, -half_w, half_w
+    return -half_len, -half_len + geometry.penalty_area_depth, -half_w, half_w
+
+
+def _push_out_of_rect(x, y, x_min, x_max, y_min, y_max, goal_line_at_max_x: bool):
+    """Push toward the nearest legal exit face of the rect. The face on the
+    goal-line side is never a legal exit (it leads out of the field)."""
+    if not (x_min <= x <= x_max and y_min <= y <= y_max):
+        return None
+    exits = []
+    if not goal_line_at_max_x:
+        exits.append((x_max - x, (1.0, 0.0)))
+    else:
+        exits.append((x - x_min, (-1.0, 0.0)))
+    exits.append((y - y_min, (0.0, -1.0)))
+    exits.append((y_max - y, (0.0, 1.0)))
+    _, (dx, dy) = min(exits, key=lambda e: e[0])
+    return dx * RETREAT_SPEED_MPS, dy * RETREAT_SPEED_MPS
+
+
+def _keep_out_push(robot, geometry, defend_positive_x: bool, is_keeper: bool):
+    """Always-on constraints: return an override velocity, or None."""
+    half_len = geometry.field_length / 2.0
+    half_w = geometry.field_width / 2.0
+    if abs(robot.x) > half_len or abs(robot.y) > half_w:
+        tx = max(-half_len, min(half_len, robot.x))
+        ty = max(-half_w, min(half_w, robot.y))
+        return _away_velocity(robot.x, robot.y, tx, ty)  # toward clamped point
+    if not is_keeper:
+        push = _push_out_of_rect(
+            robot.x, robot.y,
+            *_defense_area_bounds(geometry, defend_positive_x),
+            goal_line_at_max_x=defend_positive_x,
+        )
+        if push is not None:
+            return push
+    return _push_out_of_rect(
+        robot.x, robot.y,
+        *_defense_area_bounds(geometry, not defend_positive_x),
+        goal_line_at_max_x=not defend_positive_x,
+    )
+
+
 def apply_rule_constraints(
     commands: List[RobotCommand],
     game_state: GameState,
@@ -86,7 +133,14 @@ def apply_rule_constraints(
             kick = chip = 0.0
             dribble = False
         else:
-            if (
+            push = (
+                _keep_out_push(robot, geometry, defend_positive_x, cmd.robot_id == keeper_id)
+                if robot is not None
+                else None
+            )
+            if push is not None:
+                vx, vy = push
+            elif (
                 robot is not None
                 and ball is not None
                 and phase in _BALL_KEEP_OUT_PHASES
